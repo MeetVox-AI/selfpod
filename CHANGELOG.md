@@ -7,6 +7,28 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.10.1 — 2026-10-23
+
+### Security
+
+- **Node.js 22.23.4, from the security release of 21 October.** Both images now run it:
+  1.10.0 shipped 22.23.3 (22.23.2 in the GPU image). Since 1.10.0 the base image is pinned
+  by digest, so a rebuild no longer picks up a patched Node on its own — the pin has to move,
+  and this release moves it. The checksum of the Node the GPU image downloads was checked
+  against Node's own signed list.
+- What the release fixes, as it touches SelfPod: two flaws in TLS hostname verification,
+  which is what makes following a feed over HTTPS trustworthy — someone able to sit between
+  the NAS and the internet could otherwise have served a fake feed or fake audio. The Brotli
+  decoder flaw that made the headlines (CVE-2026-111497) was not reachable: SelfPod never
+  decompresses Brotli it did not produce, asks feeds for uncompressed responses and refuses
+  anything else unread, and never inflates a request body. The DNS flaw is in
+  `dns.resolve`, which SelfPod does not use.
+
+### Upgrading
+
+- Change the image tag to `1.10.1` (or `1.10.1-cuda`) and redeploy. No migrations, no
+  settings, nothing else changes.
+
 ## 1.10.0 — 2026-10-09
 
 The release that came out of a full audit of SelfPod: what the statistics count, what a

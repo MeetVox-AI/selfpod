@@ -11,7 +11,7 @@
 # not just by tag, so a rebuild gets the base image that was reviewed and not whatever
 # the tag points at that day. To bump: `docker buildx imagetools inspect node:22-alpine
 # --format '{{.Manifest.Digest}}'`, then paste the digest here and in the runtime stage.
-FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS build
+FROM node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS build
 
 # cmake and git are for whisper.cpp, below; the rest is insurance for native modules.
 RUN apk add --no-cache python3 make g++ cmake git
@@ -111,7 +111,7 @@ RUN set -e; \
 # Runtime stage
 # ---------------------------------------------------------------------------
 # The same digest as the build stage; bump both together (see the top of the file).
-FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+FROM node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
 
 # su-exec drops privileges without leaving a process between PID 1 and node;
 # shadow provides usermod/groupmod for the PUID/PGID pattern; tzdata makes the

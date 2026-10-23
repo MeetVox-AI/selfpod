@@ -21,8 +21,8 @@
 # '{{.Manifest.Digest}}'` for the devel image here and the runtime image below.
 FROM nvidia/cuda:12.6.3-devel-ubuntu22.04@sha256:d49bb8a4ff97fb5fe477947a3f02aa8c0a53eae77e11f00ec28618a0bcaa2ad1 AS build
 
-ARG NODE_VERSION=22.23.2
-ARG NODE_SHA256=d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307
+ARG NODE_VERSION=22.23.4
+ARG NODE_SHA256=1805bcd35e6815559bd2eb97db438d3fdb0eb3a5e6a977b7c1badca76337e9ce
 # The RTX 3050 is Ampere, compute capability 8.6. Building for every architecture takes
 # several times as long and is several times the size; override for other cards.
 ARG CUDA_ARCHITECTURES=86
