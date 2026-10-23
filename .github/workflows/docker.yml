@@ -22,7 +22,11 @@ permissions:
 # the commit), and update the comment with it.
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # Written out rather than taken from `github.repository`: image names must be
+  # lowercase and the organisation is `MeetVox-AI`, so the repository name cannot be
+  # pushed as it is. Spelling it out also means the published name only changes when
+  # someone changes it here, not when the repository is moved or renamed.
+  IMAGE_NAME: meetvox-ai/selfpod
 
 jobs:
   test:

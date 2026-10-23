@@ -159,7 +159,7 @@ ENTRYPOINT ["/app/docker/entrypoint.sh"]
 
 LABEL org.opencontainers.image.title="SelfPod (NVIDIA GPU)" \
       org.opencontainers.image.description="Self-hosted podcast server for private feeds, listening for spoken adverts on an NVIDIA GPU." \
-      org.opencontainers.image.source="https://github.com/antoine-debroye/selfpod" \
+      org.opencontainers.image.source="https://github.com/MeetVox-AI/selfpod" \
       # As the regular image, plus NVIDIA's CUDA runtime libraries from the base image,
       # redistributed under the CUDA EULA. THIRD-PARTY-LICENSES.md says so.
       org.opencontainers.image.licenses="MIT AND LGPL-2.1-or-later AND LicenseRef-NVIDIA-CUDA-EULA"

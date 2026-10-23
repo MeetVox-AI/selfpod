@@ -64,7 +64,7 @@ docker run -d --name selfpod \
   -e PUID=1000 -e PGID=1000 \
   -e TZ=Europe/London \
   --restart unless-stopped \
-  ghcr.io/antoine-debroye/selfpod:latest
+  ghcr.io/meetvox-ai/selfpod:latest
 ```
 
 Then:
@@ -131,7 +131,7 @@ current TrueNAS versions, so fill it in as follows and leave everything else alo
 | Section | Field | Value |
 |---|---|---|
 | Application name | Application Name | `selfpod` |
-| Image | Repository | `ghcr.io/antoine-debroye/selfpod` |
+| Image | Repository | `ghcr.io/meetvox-ai/selfpod` |
 | Image | Tag | `latest` |
 | General | Timezone | your zone, e.g. `Europe/London` |
 | Container | Environment Variable | `PUBLIC_BASE_URL` = the address you will reach SelfPod on |
@@ -177,7 +177,7 @@ for it.
   TrueNAS UI itself uses 80 and 443; check **Apps** for anything else on 8080.
 - **Updating.** TrueNAS does not reliably detect a new `:latest` for a Custom App.
   To update, **Edit** the app and save (which re-pulls), or in the shell:
-  `docker pull ghcr.io/antoine-debroye/selfpod:latest` and restart the app.
+  `docker pull ghcr.io/meetvox-ai/selfpod:latest` and restart the app.
 - **Keep `/data` on your pool**, as above. Don't point it at an NFS or SMB *mount* —
   SQLite can't lock reliably over those, and SelfPod will warn you if it detects it.
 
@@ -198,7 +198,7 @@ often be left alone.
 <summary><strong>Unraid</strong></summary>
 
 **Docker → Add Container**, then set: repository
-`ghcr.io/antoine-debroye/selfpod:latest`, port `8080`, path `/data` → your share
+`ghcr.io/meetvox-ai/selfpod:latest`, port `8080`, path `/data` → your share
 (e.g. `/mnt/user/podcasts`), and `PUID`/`PGID` to `99`/`100` — Unraid's usual
 `nobody`/`users` pair.
 </details>
@@ -382,7 +382,7 @@ Reading the words is the slow part of a pass. With an NVIDIA card, use the GPU i
 instead of the regular one — same app, same data, different tag:
 
 ```
-ghcr.io/antoine-debroye/selfpod:1.10.1-cuda
+ghcr.io/meetvox-ai/selfpod:1.10.1-cuda
 ```
 
 It is amd64 only, about two and a half gigabytes, and uses the `small` model by default,

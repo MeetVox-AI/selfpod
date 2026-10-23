@@ -1,7 +1,8 @@
 # Changelog
 
 Notable changes to SelfPod. Versions follow [semantic versioning](https://semver.org),
-and images are published to `ghcr.io/antoine-debroye/selfpod` under the matching tag.
+and images are published to `ghcr.io/meetvox-ai/selfpod` under the matching tag (up to
+1.10.0, `ghcr.io/antoine-debroye/selfpod`).
 
 Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
@@ -26,8 +27,11 @@ changes what your listeners see, it says so.
 
 ### Upgrading
 
-- Change the image tag to `1.10.1` (or `1.10.1-cuda`) and redeploy. No migrations, no
-  settings, nothing else changes.
+- **The image has moved.** The repository now belongs to the MeetVox-AI organisation, and
+  from this release the image is published as `ghcr.io/meetvox-ai/selfpod`. Change the
+  image repository to that as well as the tag to `1.10.1` (or `1.10.1-cuda`), then
+  redeploy. `ghcr.io/antoine-debroye/selfpod` stays at 1.10.0 and gets nothing newer.
+- No migrations, no settings, nothing else changes.
 
 ## 1.10.0 — 2026-10-09
 
