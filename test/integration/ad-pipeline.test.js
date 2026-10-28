@@ -501,15 +501,17 @@ describe('what the trimmed audio actually is', () => {
     const original = episodeBytes(0);
 
     assert.equal(response.statusCode, 200);
-    // Within half a second, not to the frame. Segments are now found by what the audio
-    // *sounds* like, and each sub-fingerprint describes a 372ms window — so a boundary
-    // is placed to a fraction of a second rather than exactly. The error is deliberately
-    // biased towards removing a little programme rather than leaving a little advert.
-    const removed = (frameProfile(original).frameCount - frameProfile(served).frameCount) * (FRAME_MS / 1000);
-    assert.ok(
-      removed >= 40 && removed < 40.8,
-      `expected the 40s read gone with a little margin, ${removed.toFixed(2)}s went`,
-    );
+    // To the frame. The read is the same MP3 frames in every episode — the way a host
+    // splices one in — so the copied-frames search finds exactly its frames and the cut
+    // takes exactly those: not the half-second margin the acoustic search adds when it
+    // is the one placing an edge (that case: "a theme tune that was re-encoded").
+    const programme = [
+      ...frameProfile(segment(100_000, framesFor(45))).hashes,
+      ...frameProfile(segment(600_000, framesFor(45))).hashes,
+    ];
+    const removed = frameProfile(original).frameCount - frameProfile(served).frameCount;
+    assert.equal(removed, framesFor(40), `expected the read's ${framesFor(40)} frames gone, ${removed} went`);
+    assert.deepEqual([...frameProfile(served).hashes], programme, 'what is served is not exactly the programme');
     // The programme before the advert is untouched, byte for byte.
     assert.equal(
       Buffer.compare(served.subarray(0, 30_000), original.subarray(0, 30_000)),

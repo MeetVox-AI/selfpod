@@ -56,9 +56,11 @@ describe('fingerprinting an episode', () => {
 
     assert.ok(result.frameCount > 0);
     // Derived data lives with the other derived data, never in the user's own folder.
-    const stored = await readdir(join(app.config.fingerprintDir, show.id));
-    assert.equal(stored.length, 1);
+    // The fingerprint, and beside it the episode's MP3 frame hashes (copied-audio.js).
+    const stored = (await readdir(join(app.config.fingerprintDir, show.id))).sort();
+    assert.equal(stored.length, 2, stored.join(', '));
     assert.match(stored[0], new RegExp(`^${episode.id}\\.\\d+\\.fp$`));
+    assert.match(stored[1], new RegExp(`^${episode.id}\\.h\\d+\\.frames$`));
 
     const files = await readdir(showDir);
     assert.ok(
@@ -131,7 +133,7 @@ describe('fingerprinting an episode', () => {
     const show = await makeEpisodes(1);
     const [episode] = app.episodes.listByShow(show.id);
     await app.adDetect.fingerprintEpisode(episode);
-    assert.equal((await readdir(join(app.config.fingerprintDir, show.id))).length, 1);
+    assert.equal((await readdir(join(app.config.fingerprintDir, show.id))).length, 2, 'the fingerprint and the frame hashes');
 
     await app.episodes.deleteWithFile(episode.id);
 

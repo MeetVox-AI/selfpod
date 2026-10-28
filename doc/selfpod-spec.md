@@ -1052,22 +1052,86 @@ per request. It is the stronger signal, and the only one that identifies
 an advert rather than something that merely repeats: a theme tune is in
 both copies, so it cannot be what differs between them.
 
-### 19.3 The cost of looking twice, and why it is rationed
+### 19.3 Audio the host inserts as it serves
 
-A second download is a second IAB-countable listen, so it doubles the
-publisher's figures for an episode taken once. Hosts also cache the
-stitch per listener, keyed on requesting address and user agent, so two
-requests from one container seconds apart are the same listener by
-construction and would hit that cache. Defeating it would need a rotating
-user agent or egress address; that is deliberate evasion of the
-publisher's measurement and SelfPod will not do it.
+Hosts such as Simplecast and Acast stitch adverts into the MP3 as each
+request is served, chosen by the requester's country and by chance. A
+French show fetched from the UK carries English adverts; fetched from
+Germany, German ones; fetched from France, French ones. So nothing about
+an inserted advert's language or content identifies it, and changing
+where SelfPod asks from (a proxy, another address) would only change
+which adverts arrive. The evidence has to be something every inserted
+advert has, whatever it says.
 
-So a second download happens only when the first file carries a positive
-signal — a sample-rate or channel-mode change part-way through, or a Xing
-header disagreeing with the frames present — never sooner than a day, a
-couple per tick across all subscriptions, and charged to the same daily
-byte budget. The second copy is deleted; the file on the share is the one
-the owner has.
+**The same bytes.** A host inserts by concatenating MP3 frames from a
+file it already has; it does not re-encode the episode around them. So
+an advert served to two episodes is *byte for byte* the same frames in
+both, while the programme — mastered and encoded once per episode —
+never shares a frame with another episode, its theme tune included.
+Frames copied between episodes are therefore audio the host spliced in
+(`src/lib/copied-audio.js`). Measured on 2026-10-28 from the UK:
+
+- RMC on Simplecast, 30 episodes (three of them best-ofs): a 13.9 s
+  opener and a 10.1 s closer, the same frames in 30 of 30; nothing else.
+  The opener is the sponsor tag *and* the "Vous écoutez RMC" ident, one
+  file; the owner chose to cut all of it.
+- Le Rendez-vous Tech on Acast, 6 episodes: UK adverts in English in
+  pre-, mid- and post-rolls, and a 2.2 s marker stitched at both edges of
+  every break.
+- Laurent Gerra (RTL) on Audiomeans: nothing copied, nothing inserted.
+
+**Breaks between markers.** A short copied clip found more than once in
+one episode is a host's slot marker. What lies between two markers, or
+between one and the edge of the file, and is no longer than two and a
+half minutes, is a break — cut whether or not any advert in it was ever
+heard elsewhere. Never when the breaks would add up to half the episode.
+Breaks are catalogued one row per slot (pre-roll, mid-roll *n*,
+post-roll), so a row is in each episode once and *Restore here* restores
+one break.
+
+**What is cut without asking**, and why the guards differ from §19.5's:
+a copied stretch carries none of the ambiguity of a merely repeated one,
+so no position guard and no fifteen-second floor (the RMC opener sits at
+0:00 and its closer is ten seconds). What remains: two and a half minutes
+at most; and a copy in only two episodes, mid-file, is offered rather
+than cut — a best-of assembled from an earlier episode's file without
+re-encoding would share programme exactly so. An advert reaches a third
+episode soon enough, or sits where hosts put them, at the very start or
+end of the file.
+
+**One row per stretch.** The acoustic search (§19.2) hears inserted audio
+too; it leaves alone what an inserted row explains, but never takes the
+occurrences of a row that is already cutting. Audio another approved row
+already cuts is not offered again.
+
+**Frame hashes are kept** beside each fingerprint (`{episode}.h1.frames`
+in the fingerprint folder) so this costs no decoding. An episode
+fingerprinted before they were kept is read once, without decoding, and
+only if its bytes are still the ones its fingerprint describes.
+
+**Looking twice.** Comparing two downloads of one episode finds what a
+host changes from day to day — the only way to learn an advert served to
+one episode only, outside any marked break. A second download is a
+second IAB-countable listen, so it is rationed: made when the first file
+carries a stitch signal (a sample-rate or channel-mode change part-way
+through, a Xing header that disagrees with the frames present), or when
+the subscription is known to insert — set by SelfPod the first time it
+finds copied audio in the show or a second download comes back
+different, or by the owner on the subscription form. Never sooner than a
+day, a couple per tick across all subscriptions, charged to the same
+daily byte budget; the second copy is deleted.
+
+Hosts cache the stitch per listener, keyed on address and user agent, so
+a second request seconds later is the same listener by construction
+(three downloads of one RMC episode, minutes apart, two user agents:
+byte-identical). Defeating that would need a rotating user agent or
+egress address. That is deliberate evasion of the publisher's
+measurement, and it would not help: it changes which adverts arrive,
+not whether they do. SelfPod asks again, later, as itself.
+
+**What none of this finds:** an advert inserted into one episode only,
+outside any marked break, served identically to both downloads. The words
+(§19.6) and a taught boundary remain for that.
 
 ### 19.4 Cutting
 
@@ -1296,6 +1360,20 @@ pre-roll, or all happen to carry none at all, gets no proposal — the owner can
 point at the jingle by hand. Confirming a jingle does not guess where a *different*
 kind of ident sits partway into an episode; it only ever cuts from 0:00 to where the
 sound was heard.
+
+**Not confirmed by itself when it starts after the host's audio ends.** The proposal
+is the earliest sound every recent episode shares, and that need not be a station
+ident. On Le Rendez-vous Tech (Acast, 2026-10-28) one sponsored episode carried no
+adverts and so no break marker, which left the show's own theme as that sound — after
+the host's spoken intro. Confirmed automatically, 1.10 cut the intro from every
+episode, up to 1:33. Now, in any recent episode where the host's inserted audio
+(§19.3: copied frames, or a break between markers) starts before the jingle but ends
+more than three seconds before it, the jingle is not confirmed automatically: what
+lies between is the show's own. It stays a proposal the owner can still confirm, and
+the breaks are cut regardless. A jingle SelfPod confirmed by itself before this rule is
+taken back the same way, with its cut; one the owner confirmed, or a taught boundary
+linked, is never touched. RMC is unaffected: its "Vous écoutez RMC" ident is inside the
+inserted opener, so the jingle starts before the inserted audio ends.
 
 ### 19.8 What a cut is, putting one back, and when SelfPod looks
 

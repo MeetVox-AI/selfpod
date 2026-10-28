@@ -422,20 +422,32 @@ export function createRemoteFeeds({
    * fine, SelfPod simply will not be re-checking it, and an exception thrown for that
    * would throw away a file that is already on disk and already accepted.
    */
-  async function planRecheck(path, filename, declaredDurationSeconds) {
+  async function planRecheck(path, filename, declaredDurationSeconds, { insertsAudio = false } = {}) {
     if (!filename.toLowerCase().endsWith('.mp3')) return {};
+    const after = () => new Date(Date.now() + RECHECK_DELAY_MS).toISOString();
     try {
       const signals = describeStitchSignals(frameProfile(await readFile(path)), {
         declaredDurationSeconds,
       });
-      if (!signals.likely) return {};
-      return {
-        recheck_reason: signals.detail,
-        recheck_after: new Date(Date.now() + RECHECK_DELAY_MS).toISOString(),
-      };
+      if (signals.likely) return { recheck_reason: signals.detail, recheck_after: after() };
     } catch {
-      return {};
+      // Unreadable frames say nothing either way; what is known about the host still does.
     }
+    /*
+     * A host already seen inserting audio is asked again for every episode, stitch marks
+     * or not. Simplecast and Acast splice cleanly — no sample-rate change, no Xing
+     * mismatch, measured on 2026-10-28 — so the marks above never fire for them, and the
+     * advert that rotates by tomorrow is only learnt by asking tomorrow. Still the same
+     * address, the same user agent, a day later and charged to the same byte budget:
+     * this asks more often, it never disguises the asking (spec §19.3).
+     */
+    if (insertsAudio) {
+      return {
+        recheck_reason: 'This feed’s host inserts audio as it serves, so every episode is compared with a second download.',
+        recheck_after: after(),
+      };
+    }
+    return {};
   }
 
   /**
@@ -593,7 +605,9 @@ export function createRemoteFeeds({
       // one looks like it had adverts joined on rather than mixed in. It decides one
       // thing: whether to spend a second download on it in a day's time. See
       // lib/stitch-signals.js for why that bar is deliberately high.
-      const recheck = await planRecheck(staged, extension.filename, row.declared_duration_seconds);
+      const recheck = await planRecheck(staged, extension.filename, row.declared_duration_seconds, {
+        insertsAudio: Boolean(subscription.inserts_audio),
+      });
 
       subscriptions.markItem(row.id, {
         identity_key: identityKey,
@@ -840,6 +854,9 @@ export function createRemoteFeeds({
           // programme at an offset nobody would think to check.
           const ranges = runsToRanges(diff.onlyInA, original.frames);
           segments = adDetect ? (adDetect.recordDiffSegments(episode, ranges, { timing: null })?.segments ?? 0) : 0;
+          // A host that served two different files has shown it inserts audio, so
+          // every later episode of the feed is compared too.
+          if (ranges.length || !diff.identical) subscriptions.markInsertsAudio(item.subscription_id);
           outcome = ranges.length
             ? 'differs'
             : diff.identical

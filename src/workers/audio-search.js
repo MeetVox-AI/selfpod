@@ -1,7 +1,8 @@
 import { parentPort } from 'node:worker_threads';
 
 import { findHeadAnchors } from '../lib/audio-anchor.js';
-import { decodeWindowToWav, fingerprintFile, profileFile } from '../lib/audio-tasks.js';
+import { decodeWindowToWav, fingerprintFile, frameHashesFile, profileFile } from '../lib/audio-tasks.js';
+import { findCopiedAudio } from '../lib/copied-audio.js';
 import { findRepeatedAudio } from '../lib/repeated-audio.js';
 
 /**
@@ -23,7 +24,9 @@ import { findRepeatedAudio } from '../lib/repeated-audio.js';
 const TASKS = {
   repeatedAudio: ({ episodes, options }) => ({ result: findRepeatedAudio(episodes, options) }),
   headAnchors: ({ episodes, options }) => ({ result: findHeadAnchors(episodes, options) }),
+  copiedAudio: ({ episodes, options }) => ({ result: findCopiedAudio(episodes, options) }),
   fingerprintFile,
+  frameHashesFile,
   profileFile,
   decodeWindow: decodeWindowToWav,
 };

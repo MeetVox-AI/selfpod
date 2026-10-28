@@ -86,6 +86,21 @@
     <% } %>
   </div>
 
+  <div class="field">
+    <label for="f-inserts">This feed’s host inserts audio as it serves</label>
+    <div class="toggle<%= sub && sub.insertsAudio ? ' on' : '' %>">
+      <input type="checkbox" id="f-inserts" name="insertsAudio" role="switch" class="switch-input"
+             value="1"<%= sub && sub.insertsAudio ? ' checked' : '' %> aria-describedby="f-inserts-hint">
+      <label class="switch" for="f-inserts" aria-hidden="true"></label>
+      <span class="tl" data-toggle-label><%= sub && sub.insertsAudio ? 'Yes' : 'No' %></span>
+    </div>
+    <div class="hint" id="f-inserts-hint">
+      When on, each new episode is downloaded once more a day later, from the same address, and
+      whatever changed between the two is cut. SelfPod turns this on by itself the first time it
+      finds audio the host inserted. Each second download counts again in the publisher’s figures.
+    </div>
+  </div>
+
   <% if (it.reopened) { %>
     <div class="notice info" role="status" style="margin:4px 0 14px">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg>

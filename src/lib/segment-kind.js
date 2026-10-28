@@ -10,6 +10,7 @@ import { SEGMENT_KINDS, SEGMENT_SOURCES } from '../constants.js';
 export function inferKind({ signature = '', source = null, cues = null } = {}) {
   if (signature.startsWith('marker:')) return SEGMENT_KINDS.BOUNDARY_WORDS;
   if (signature.startsWith('anchor:')) return SEGMENT_KINDS.JINGLE;
+  if (signature.startsWith('copied:') || signature.startsWith('break:')) return SEGMENT_KINDS.INSERTED;
   if (source === SEGMENT_SOURCES.DIFF) return SEGMENT_KINDS.DIFF;
   if (source === SEGMENT_SOURCES.TRANSCRIPT) {
     return cues === null || cues === undefined ? SEGMENT_KINDS.REMEMBERED_WORDS : SEGMENT_KINDS.REPEATED_WORDS;

@@ -66,6 +66,10 @@ export function presentSegment(segment, { episodes, transcripts = null, mode = '
       ? 'The boundary you set'
       : isAnchor
         ? 'The station jingle'
+        : kind === SEGMENT_KINDS.INSERTED
+        ? (segment.signature ?? '').startsWith('break:')
+          ? 'Between the host’s markers'
+          : `Spliced in by the host — the same bytes in ${segment.episode_count} ${segment.episode_count === 1 ? 'episode' : 'episodes'}`
         : segment.source === SEGMENT_SOURCES.DIFF
         ? 'Changed between two downloads of the same episode'
         : segment.source === SEGMENT_SOURCES.TRANSCRIPT

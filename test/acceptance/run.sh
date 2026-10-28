@@ -960,6 +960,88 @@ if issues:
   || fail "the recogniser is reported unhealthy"
 
 # ---------------------------------------------------------------------- report
+step "24. Audio a host spliced in is cut, whatever language it is in"
+
+# The two shapes measured on real hosts on 2026-10-28 (spec §19.3): the same opener
+# spliced in at 0:00 of every episode (Simplecast, RMC), and a short marker stitched at
+# both edges of every break, around adverts no other episode carried (Acast). Byte-
+# identical frames are the evidence, so this is generated rather than encoded: the
+# adverts here have no language at all, which is the point.
+mkdir -p "${WORK}/data/shows/host-club"
+python3 - "${WORK}/data/shows/host-club" "${WORK}/host-expected" <<'PY'
+import sys, pathlib
+
+FRAME_BYTES = 417
+FRAME_MS = 1152 / 44100 * 1000
+
+def frame(seed):
+    header = bytes([0xFF, 0xFB, (9 << 4) | (0 << 2), (1 << 6)])
+    payload = bytearray(FRAME_BYTES - 4)
+    x = (seed * 2654435761) & 0xFFFFFFFF
+    for i in range(len(payload)):
+        x = (x ^ (x << 13)) & 0xFFFFFFFF
+        x ^= x >> 17
+        x = (x ^ (x << 5)) & 0xFFFFFFFF
+        payload[i] = x & 0xFE
+    return header + bytes(payload)
+
+def seconds(n):
+    return round(n * 1000 / FRAME_MS)
+
+def segment(start, count):
+    return b"".join(frame(start + i) for i in range(count))
+
+out, expected = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+expected.mkdir(parents=True, exist_ok=True)
+opener = segment(30_000, seconds(14))          # the same file at 0:00 of every episode
+marker = segment(70_000, seconds(2.2))          # the host's slot marker
+for n in range(3):
+    first = segment(1_000_000 + n * 100_000, seconds(200))
+    second = segment(1_050_000 + n * 100_000, seconds(200))
+    midroll = segment(200_000 + n * 10_000, seconds(30))   # heard in this episode only
+    (out / f"episode-{n + 1}.mp3").write_bytes(opener + first + marker + midroll + marker + second)
+    (expected / f"episode-{n + 1}.mp3").write_bytes(first + second)
+PY
+
+wait_for_scan 12
+HOST_SHOW_ID="$(api "${BASE}/api/shows" | json '
+print(next(s["id"] for s in json.load(sys.stdin)["shows"] if s["slug"] == "host-club"))')"
+api -X PATCH -H 'Content-Type: application/json' -d '{"mode":"auto"}' \
+  "${BASE}/api/shows/${HOST_SHOW_ID}/ad-trim" >/dev/null
+api -X POST "${BASE}/api/shows/${HOST_SHOW_ID}/ad-detect" >/dev/null
+
+HOST_STATE="$(api "${BASE}/api/shows/${HOST_SHOW_ID}/ad-segments")"
+printf '%s' "$HOST_STATE" | json '
+d = json.load(sys.stdin)
+kinds = sorted((s.get("kind"), s["status"]) for s in d["segments"])
+inserted = [k for k in kinds if k[0] == "inserted"]
+ok = len(inserted) >= 2 and all(status == "approved" for _, status in inserted) and d["held"] == 0
+print(kinds, "held", d["held"])
+sys.exit(0 if ok else 1)' >/dev/null \
+  && pass "the opener and the break are found and cut without asking, and nothing is held" \
+  || fail "the inserted audio was not cut on its own ($(printf '%s' "$HOST_STATE" | head -c 160))"
+
+HOST_FEED_TOKEN="$(api "${BASE}/api/shows/${HOST_SHOW_ID}" | json '
+print(json.load(sys.stdin)["show"]["feedToken"])')"
+HOST_FEED="$(curl -s "${BASE}/feeds/host-club/${HOST_FEED_TOKEN}.xml")"
+HOST_OK=0
+for n in 1 2 3; do
+  URL="$(printf '%s' "$HOST_FEED" | json "
+import re
+body = sys.stdin.read()
+print(next(u for u in re.findall(r'url=\"([^\"]+)\"', body) if 'episode-${n}.mp3' in u).replace('&amp;', '&'))")"
+  curl -s -o "${WORK}/host-served-${n}.mp3" "$URL"
+  python3 - "${WORK}/host-served-${n}.mp3" "${WORK}/host-expected/episode-${n}.mp3" <<'PY' && HOST_OK=$((HOST_OK + 1))
+import sys, pathlib
+served, expected = (pathlib.Path(p).read_bytes() for p in sys.argv[1:3])
+# The programme, every byte of it, and nothing else but a header a cut may add.
+sys.exit(0 if expected in served and len(served) - len(expected) < 2000 else 1)
+PY
+done
+[ "$HOST_OK" = "3" ] \
+  && pass "each episode is served as exactly its programme: opener, markers and mid-roll gone" \
+  || fail "only ${HOST_OK} of 3 episodes were served as exactly their programme"
+
 step "Result"
 printf '  %d passed, %d failed\n\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

@@ -20,9 +20,12 @@ import { badRequest, notFound } from '../lib/errors.js';
 import { EVENTS } from '../lib/events.js';
 import {
   FINGERPRINT_HEADER_BYTES,
+  FRAME_HASHES_VERSION,
   decodeFingerprint,
   decodeFingerprintHeader,
+  decodeFrameHashes,
   encodeFingerprint,
+  encodeFrameHashes,
   msToFrame,
 } from '../lib/fingerprint-file.js';
 import { createAudioWorker } from '../lib/audio-search.js';
@@ -88,12 +91,20 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
     'SELECT * FROM ad_segments WHERE show_id = ? ORDER BY episode_count DESC, duration_ms DESC',
   );
   const selectSegment = db.prepare('SELECT * FROM ad_segments WHERE id = ?');
+  const markInsertingHost = db.prepare(
+    'UPDATE feed_subscriptions SET inserts_audio = 1, updated_at = ? WHERE show_id = ? AND inserts_audio = 0',
+  );
   const selectBySignature = db.prepare(
     'SELECT * FROM ad_segments WHERE show_id = ? AND signature = ?',
   );
 
   function fingerprintPath(showId, episodeId) {
     return join(config.fingerprintDir, showId, `${episodeId}.${FINGERPRINT_VERSION}.fp`);
+  }
+
+  /** Beside the fingerprint, so `derived-audio.js` removes it with the episode. */
+  function frameHashesPath(showId, episodeId) {
+    return join(config.fingerprintDir, showId, `${episodeId}.h${FRAME_HASHES_VERSION}.frames`);
   }
 
   /* ---- fingerprints -------------------------------------------------------- */
@@ -215,6 +226,20 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
 
     const target = fingerprintPath(show.id, episode.id);
     await mkdir(join(config.fingerprintDir, show.id), { recursive: true });
+    // The frame hashes first: a fingerprint row that exists promises they describe the
+    // same file, and a crash between the two writes must not leave last version's
+    // hashes beside this version's fingerprint.
+    if (read.frameHashes?.length) {
+      await writeFile(
+        frameHashesPath(show.id, episode.id),
+        encodeFrameHashes({
+          hashes: read.frameHashes,
+          sampleRate: read.sampleRate,
+          samplesPerFrame: read.samplesPerFrame,
+          durationMs: read.durationMs,
+        }),
+      );
+    }
     await writeFile(target, encoded);
 
     upsertFingerprint.run({
@@ -296,6 +321,58 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
     } finally {
       await handle?.close().catch(() => {});
     }
+  }
+
+  /**
+   * An episode's MP3 frame hashes, with how long one frame lasts, or null.
+   *
+   * Written beside every fingerprint computed since frame hashes were kept. For an
+   * episode fingerprinted before that, they are read from the file once — a read and a
+   * walk of its frames, no decode — and kept. Only for the very file the fingerprint
+   * describes: if the digest differs, the episode changed since, the next fingerprint
+   * pass will write both afresh, and until then there is nothing to say about it.
+   */
+  async function loadFrameHashes(episode) {
+    const row = selectFingerprint.get(episode.id);
+    if (!row || row.algorithm_version !== FINGERPRINT_VERSION) return null;
+    const path = frameHashesPath(episode.show_id, episode.id);
+    let decoded = null;
+    try {
+      decoded = decodeFrameHashes(await readFile(path));
+    } catch {
+      decoded = null;
+    }
+    if (!decoded) {
+      const show = shows.get(episode.show_id);
+      if (!show) return null;
+      const gate = await gateEpisodeFile(shows.dirFor(show), episode.filename, { maxBytes: MAX_PIPELINE_FILE_BYTES });
+      if (gate.refused) return null;
+      let read;
+      try {
+        read = await search.frameHashesFile({ path: gate.path, maxBytes: MAX_PIPELINE_FILE_BYTES });
+      } catch (error) {
+        logger?.debug({ err: error, episodeId: episode.id }, 'could not read frame hashes');
+        return null;
+      }
+      if (!read?.frameHashes?.length || read.sha256 !== row.sha256) return null;
+      decoded = {
+        hashes: read.frameHashes,
+        sampleRate: read.sampleRate,
+        samplesPerFrame: read.samplesPerFrame,
+        durationMs: read.durationMs,
+      };
+      await mkdir(join(config.fingerprintDir, show.id), { recursive: true });
+      await writeFile(path, encodeFrameHashes(decoded)).catch((error) => {
+        logger?.debug({ err: error, episodeId: episode.id }, 'could not keep frame hashes');
+      });
+    }
+    if (!decoded.sampleRate || !decoded.samplesPerFrame) return null;
+    return {
+      episodeId: episode.id,
+      hashes: decoded.hashes,
+      frameMs: (decoded.samplesPerFrame / decoded.sampleRate) * 1000,
+      durationMs: decoded.durationMs,
+    };
   }
 
   /*
@@ -897,6 +974,60 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
   /** How many of a show's newest episodes are searched when proposing a jingle. */
   const MAX_PROPOSAL_EPISODES = 20;
 
+  /**
+   * How far past the end of the host's inserted audio a jingle may start and still be
+   * the start of the programme. A host's opener runs straight into the show; three
+   * seconds allows for a breath of silence or a sting, and no sentence.
+   */
+  const JINGLE_AFTER_INSERT_MS = 3000;
+
+  /**
+   * Per episode, the stretches the host inserted — copied frames and breaks between
+   * markers — as `[startMs, endMs]`, read from the frames afresh rather than from the
+   * catalogue, so the answer does not depend on which detector happened to write first
+   * or on rows a confirmed jingle already overlaps.
+   */
+  async function insertedStretches(show) {
+    const corpus = [];
+    for (const episode of episodes.listByShow(show.id)) {
+      if (corpus.length >= corpusWindow()) break;
+      const frames = await loadFrameHashes(episode);
+      if (frames?.hashes?.length) corpus.push({ id: episode.id, hashes: frames.hashes, frameMs: frames.frameMs });
+    }
+    const stretches = new Map();
+    if (corpus.length < 2) return stretches;
+    work.corpusSearches += 1;
+    const found = await search.copiedAudio(corpus);
+    const add = (episodeId, startMs, endMs) => {
+      if (!stretches.has(episodeId)) stretches.set(episodeId, []);
+      stretches.get(episodeId).push([startMs, endMs]);
+    };
+    for (const row of found.copied) for (const o of row.occurrences) add(o.episodeId, o.startMs, o.endMs);
+    for (const block of found.blocks) add(block.episodeId, block.startMs, block.endMs);
+    return stretches;
+  }
+
+  /**
+   * An episode where the jingle starts well after the host's inserted audio has ended,
+   * or null. Then what lies between is the show's own — Le Rendez-vous Tech's host
+   * introducing the episode before the theme — and "cut everything before the jingle"
+   * would cut it. Only inserted audio that starts before the jingle counts; an episode
+   * with none of it at its head says nothing either way, which is the case the jingle
+   * search was built for (a pre-roll heard once, then the station ident).
+   */
+  async function jingleFollowsProgramme(show, onsetByEpisode, candidates) {
+    const stretches = await insertedStretches(show);
+    for (const episode of candidates) {
+      const onset = onsetByEpisode.get(episode.id);
+      if (onset === undefined || onset < MIN_ANCHOR_CUT_MS) continue;
+      const before = (stretches.get(episode.id) ?? []).filter(([start]) => start < onset);
+      if (!before.length) continue;
+      const insertedEnd = Math.max(...before.map(([, end]) => end));
+      if (onset - insertedEnd > JINGLE_AFTER_INSERT_MS) return { episodeId: episode.id, gapMs: onset - insertedEnd };
+    }
+    return null;
+  }
+
   const selectAnchors = db.prepare('SELECT * FROM ad_anchors WHERE show_id = ? ORDER BY created_at');
   const selectAnchor = db.prepare('SELECT * FROM ad_anchors WHERE id = ?');
   const insertAnchorRow = db.prepare(
@@ -1210,6 +1341,31 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
           ([from, to]) => occurrence.start >= from && occurrence.end <= to,
         );
 
+      /*
+       * And ground the copied-frames search already explains: audio the host inserted
+       * sounds the same in every episode too, so this search finds it again — as "audio
+       * this show repeats", held for review because it sits at 0:00 — beside the row
+       * that already cuts it. By overlap rather than containment, because this search
+       * pushes its edges outwards and the frames' edges are exact.
+       */
+      const insertedByEpisode = new Map();
+      for (const row of selectSegments.all(show.id)) {
+        if (row.kind !== SEGMENT_KINDS.INSERTED || row.status === SEGMENT_STATUS.REJECTED) continue;
+        for (const o of selectOccurrencesOf.all(row.id)) {
+          if (!insertedByEpisode.has(o.episode_id)) insertedByEpisode.set(o.episode_id, []);
+          insertedByEpisode.get(o.episode_id).push([o.start_frame, o.end_frame]);
+        }
+      }
+      const coveredByInserted = (occurrence) => {
+        const length = occurrence.end - occurrence.start;
+        if (length <= 0) return false;
+        const inside = (insertedByEpisode.get(occurrence.episodeId) ?? []).reduce(
+          (sum, [from, to]) => sum + Math.max(0, Math.min(to, occurrence.end) - Math.max(from, occurrence.start)),
+          0,
+        );
+        return inside >= SAME_THING_OVERLAP * length;
+      };
+
       const updatedThisPass = new Set();
       let recorded = 0;
       // Counted apart from `recorded`, because "found three things" and "found three
@@ -1254,7 +1410,19 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
         // show repeats." A brand new segment left with fewer than two occurrences by
         // that filtering is not worth creating; an existing one is still upserted with
         // whatever survives, so it shrinks (or empties) rather than going stale.
-        const inSearch = occurrences.filter((occurrence) => !coveredByAnchor(occurrence));
+        // A row already cutting keeps what it cuts, whatever the copied search found
+        // since: it is the owner's decision (or automatic mode's), and taking its
+        // occurrences away for a row still waiting to be asked about would put the
+        // advert back until someone answers.
+        //
+        // And only when the copied rows explain *every* occurrence. A theme copied byte
+        // for byte into two episodes and re-encoded in a third is heard in three: the
+        // third is evidence the copies are not, and dropping the two copied occurrences
+        // would leave one and lose the finding (acceptance step 22).
+        const cutting = known?.status === SEGMENT_STATUS.APPROVED;
+        const unanchored = occurrences.filter((occurrence) => !coveredByAnchor(occurrence));
+        const explained = !cutting && unanchored.length > 0 && unanchored.every(coveredByInserted);
+        const inSearch = explained ? [] : unanchored;
         if (!known && inSearch.length < 2) continue;
         // Occurrences in episodes this search did not look at are carried forward
         // untouched: not being compared this pass is not the same as not being there.
@@ -1290,6 +1458,167 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
 
       events?.emit(EVENTS.SHOW_CHANGED, { showId: show.id });
       logger?.info({ showId: show.id, segments: recorded, fresh }, 'looked for repeated audio');
+      return { segments: recorded, newSegments: fresh, episodes: corpus.length };
+    },
+
+    /**
+     * Finds audio the host spliced in, by its MP3 frames, and updates the catalogue.
+     *
+     * Two kinds of row, both `inserted` (copied-audio.js says why each is evidence):
+     * every stretch whose frames are byte for byte the same in two or more of the newest
+     * episodes, one row each; and the breaks between a host's slot markers, one row for
+     * the show with an occurrence per break. Cheap next to the acoustic search — no
+     * decoding, the frame hashes are kept beside the fingerprint — and run first, so
+     * the acoustic search can leave alone what this has already explained.
+     *
+     * Rows are recognised again by where they are as well as by their frames: the host
+     * may serve a variant that differs in a frame, and the row the owner already decided
+     * about must stay the one that row is.
+     */
+    async detectCopiedAudio(showId) {
+      const show = shows.getOrThrow(showId);
+      if (show.ad_trim_mode === 'off') return { segments: 0, skipped: 'mode_off' };
+
+      const corpus = [];
+      for (const episode of episodes.listByShow(show.id)) {
+        if (corpus.length >= corpusWindow()) break;
+        const frames = await loadFrameHashes(episode);
+        if (frames?.hashes?.length) corpus.push({ id: episode.id, hashes: frames.hashes, frameMs: frames.frameMs });
+      }
+      const durations = Object.fromEntries(corpus.map((entry) => [entry.id, Math.round(entry.hashes.length * entry.frameMs)]));
+      if (corpus.length < 2) return { segments: 0, skipped: 'not_enough_episodes' };
+      const inWindow = new Set(corpus.map((entry) => entry.id));
+
+      work.corpusSearches += 1;
+      const found = await search.copiedAudio(corpus);
+
+      const known = selectSegments
+        .all(show.id)
+        .filter((row) => row.kind === SEGMENT_KINDS.INSERTED)
+        .map((row) => ({ row, occurrences: selectOccurrencesOf.all(row.id) }));
+      const knownFor = (occurrences) => {
+        for (const { row, occurrences: stored } of known) {
+          const same = occurrences.some((found_) =>
+            stored.some(
+              (o) =>
+                o.episode_id === found_.episodeId &&
+                Math.min(o.end_frame, found_.endFrame) - Math.max(o.start_frame, found_.startFrame) >=
+                  SAME_THING_OVERLAP * Math.max(found_.endFrame - found_.startFrame, o.end_frame - o.start_frame),
+            ),
+          );
+          if (same) return row;
+        }
+        return null;
+      };
+      // Occurrences in episodes this search did not look at stay as they were: not being
+      // compared this pass is not the same as not being there.
+      const carriedFor = (row) =>
+        row
+          ? selectOccurrencesOf
+              .all(row.id)
+              .filter((o) => !inWindow.has(o.episode_id))
+              .map((o) => ({ episodeId: o.episode_id, start: o.start_frame, end: o.end_frame, startMs: o.start_ms, endMs: o.end_ms }))
+          : [];
+      const asOccurrence = (o) => ({ episodeId: o.episodeId, start: o.startFrame, end: o.endFrame, startMs: o.startMs, endMs: o.endMs });
+
+      const write = (existing, signature, occurrences, durationMs, { betweenMarkers = false } = {}) => {
+        const all = [...occurrences.map(asOccurrence), ...carriedFor(existing)];
+        const episodeCount = new Set(all.map((o) => o.episodeId)).size;
+        const verdict = safeToApproveAutomatically(
+          { durationMs, episodeCount, betweenMarkers, occurrences: all },
+          { source: 'inserted', episodeDurations: durations },
+        );
+        const auto = show.ad_trim_mode === 'auto' && verdict.safe;
+        return upsertSegment(show.id, {
+          signature: existing?.signature ?? signature,
+          kind: SEGMENT_KINDS.INSERTED,
+          durationMs,
+          episodeCount,
+          occurrenceCount: all.length,
+          occurrences: all,
+          status: auto ? SEGMENT_STATUS.APPROVED : SEGMENT_STATUS.CANDIDATE,
+          autoApproved: auto,
+          holdReason: verdict.safe ? null : verdict.reason,
+        });
+      };
+
+      /*
+       * A copied stretch that sits inside a break is already cut by the break's row.
+       * Written as well, it would be a second row for the same audio — and, being in
+       * two episodes mid-file more often than not, one that waits to be asked about and
+       * holds those episodes back while the break beside it is cut unasked.
+       */
+      const breaksIn = new Map();
+      for (const block of found.blocks) {
+        if (!breaksIn.has(block.episodeId)) breaksIn.set(block.episodeId, []);
+        breaksIn.get(block.episodeId).push(block);
+      }
+      const insideABreak = (o) =>
+        (breaksIn.get(o.episodeId) ?? []).some((block) => o.startFrame >= block.startFrame && o.endFrame <= block.endFrame);
+
+      /*
+       * Audio another approved row already cuts — a read the owner removed by ear before
+       * this search existed, a taught range — is not offered again: a second row would
+       * be a question about something already answered, and in review mode it would hold
+       * the episode back until it was answered twice.
+       */
+      const cutByOthers = new Map();
+      for (const row of selectSegments.all(show.id)) {
+        if (row.kind === SEGMENT_KINDS.INSERTED || row.status !== SEGMENT_STATUS.APPROVED) continue;
+        for (const o of selectOccurrencesOf.all(row.id)) {
+          if (!cutByOthers.has(o.episode_id)) cutByOthers.set(o.episode_id, []);
+          cutByOthers.get(o.episode_id).push([o.start_frame, o.end_frame]);
+        }
+      }
+      const alreadyCut = (o) => {
+        const length = o.endFrame - o.startFrame;
+        const covered = (cutByOthers.get(o.episodeId) ?? []).reduce(
+          (sum, [from, to]) => sum + Math.max(0, Math.min(to, o.endFrame) - Math.max(from, o.startFrame)),
+          0,
+        );
+        return length > 0 && covered >= SAME_THING_OVERLAP * length;
+      };
+
+      let recorded = 0;
+      let fresh = 0;
+      const written = new Set();
+      for (const row of found.copied) {
+        if (row.occurrences.every((o) => insideABreak(o) || alreadyCut(o))) continue;
+        const existing = selectBySignature.get(show.id, row.signature) ?? knownFor(row.occurrences);
+        // The first find to reach a stored row is it; a second rewriting the same row
+        // would replace its occurrences with a smaller set and re-cut every episode.
+        if (existing && written.has(existing.id)) continue;
+        const stored = write(existing, row.signature, row.occurrences, row.durationMs);
+        written.add(stored.id);
+        recorded += 1;
+        if (stored.isNew) fresh += 1;
+      }
+      /*
+       * The breaks, one row per slot — the pre-roll, each mid-roll by its place, the
+       * post-roll — not one per break. A row per break would be a hundred rows for one
+       * finding; one row for all of them would be in each episode three times, and
+       * "Restore here" restores one occurrence of a row in an episode. A slot is in each
+       * episode at most once.
+       */
+      const slots = new Map();
+      for (const block of found.blocks) {
+        if (alreadyCut(block)) continue;
+        if (!slots.has(block.slot)) slots.set(block.slot, []);
+        slots.get(block.slot).push(block);
+      }
+      for (const [slot, blocks] of slots) {
+        const longest = Math.max(...blocks.map((block) => block.endMs - block.startMs));
+        const signature = `break:${slot}`;
+        const stored = write(selectBySignature.get(show.id, signature), signature, blocks, longest, { betweenMarkers: true });
+        recorded += 1;
+        if (stored.isNew) fresh += 1;
+      }
+
+      // The host inserts: every new episode of this feed is worth a second download.
+      if (recorded) markInsertingHost.run(nowIso(), show.id);
+
+      if (recorded) events?.emit(EVENTS.SHOW_CHANGED, { showId: show.id });
+      logger?.info({ showId: show.id, segments: recorded, fresh, episodes: corpus.length }, 'looked for inserted audio');
       return { segments: recorded, newSegments: fresh, episodes: corpus.length };
     },
 
@@ -1914,26 +2243,59 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
        * automatically confirmed jingle dismisses it, so it is never proposed again.
        * In review mode it stays a question.
        */
+      /*
+       * …unless the host's own inserted audio shows the "jingle" is not where the
+       * programme starts (`jingleFollowsProgramme`). Found on Le Rendez-vous Tech: its
+       * one sponsored episode has no adverts and so no break marker, which left the
+       * show's theme as the only sound every episode opens with — after the host's
+       * spoken intro. Confirmed automatically, it cut that intro from every episode.
+       * It stays a proposal the owner can still confirm; the breaks are cut regardless.
+       */
+      const recent = fingerprinted.slice(0, MAX_PROPOSAL_EPISODES);
+      let takenBack = false;
       if (!anchor.confirmed_at && show.ad_trim_mode === 'auto' && anchor.origin === 'proposed') {
-        const recent = fingerprinted.slice(0, MAX_PROPOSAL_EPISODES);
-        if (recent.length >= 2 && recent.every((episode) => onsetByEpisode.has(episode.id))) {
+        if (
+          recent.length >= 2 &&
+          recent.every((episode) => onsetByEpisode.has(episode.id)) &&
+          !(await jingleFollowsProgramme(show, onsetByEpisode, recent))
+        ) {
           db.prepare(
             'UPDATE ad_anchors SET confirmed_at = @now, auto_confirmed = 1, updated_at = @now WHERE id = @id',
           ).run({ now: nowIso(), id: anchor.id });
           anchor = selectAnchor.get(anchor.id);
           autoConfirmed = true;
         }
+      } else if (anchor.confirmed_at && anchor.auto_confirmed && anchor.origin === 'proposed' && !autoConfirmed) {
+        /*
+         * And one SelfPod confirmed by itself before this check existed is taken back
+         * the same way — never one the owner confirmed or a taught boundary linked.
+         * Its cut goes with it, and the episodes it was in are cut again without it.
+         */
+        const wrong = await jingleFollowsProgramme(show, onsetByEpisode, recent);
+        if (wrong) {
+          const segment = selectBySignature.get(show.id, `anchor:${anchor.id}`);
+          if (segment) {
+            markForRecut(segment.id);
+            db.prepare('DELETE FROM ad_segments WHERE id = ?').run(segment.id);
+          }
+          db.prepare(
+            'UPDATE ad_anchors SET confirmed_at = NULL, auto_confirmed = 0, updated_at = @now WHERE id = @id',
+          ).run({ now: nowIso(), id: anchor.id });
+          anchor = selectAnchor.get(anchor.id);
+          takenBack = true;
+          logger?.info({ showId: show.id, anchorId: anchor.id, ...wrong }, 'took back a jingle that starts after the programme does');
+        }
       }
 
       // Whether this call wrote anything the other detectors read: a proposal, a
       // confirmation, or a fresh hit row. The pipeline runs the detectors again
       // within the same pass when it did, so a marker linked here is cut to today.
-      const changed = proposed || linked || autoConfirmed || located > 0;
+      const changed = proposed || linked || autoConfirmed || takenBack || located > 0;
 
       // A proposal is not a decision. Stopping here leaves the hits recorded — the
       // review card can already say how many episodes the jingle was heard in — but
       // cuts nothing until the owner, or a linked marker, actually decides.
-      if (!anchor.confirmed_at) return { skipped: 'awaiting_decision', anchorId: anchor.id, proposed, changed, located };
+      if (!anchor.confirmed_at) return { skipped: 'awaiting_decision', anchorId: anchor.id, proposed, changed, located, takenBack };
 
       const occurrences = [];
       for (const [episodeId, onsetMs] of onsetByEpisode) {
@@ -2489,7 +2851,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
    */
   const READ_ONLY = new Set([
     'fingerprintEpisode', 'loadFingerprint', 'fingerprintDigest', 'close', 'countFingerprinted',
-    'fingerprintShow', 'detectForShow', 'detectFromTranscripts', 'detectAnchors', 'reconcileKinds',
+    'fingerprintShow', 'detectForShow', 'detectCopiedAudio', 'detectFromTranscripts', 'detectAnchors', 'reconcileKinds',
     'foldDuplicateReads', 'sponsorSuggestions', 'exemplarTranscripts', 'spokenIn', 'anchorCutFor',
     'listSegments', 'getSegment', 'listAnchors', 'getAnchor', 'anchorSummary', 'anchorStatusFor',
     'listMarkers', 'getMarker', 'restoresIn', 'isRestored', 'cutListFor', 'detectionInputs', 'catalogueDigest', 'workDone',

@@ -19,6 +19,8 @@ let audioRequests;
 let advert;
 /** How long the advert the sentinel is currently inserting runs for. */
 let advertSeconds;
+/** Whether the host encodes its adverts like the programme, leaving no stitch marks. */
+let cleanSplice;
 
 /**
  * One episode, with whichever advert the host is currently inserting.
@@ -31,7 +33,7 @@ let advertSeconds;
 function episode(advertSeed, advertSeconds = 20) {
   return stitch(
     segment(10_000, framesFor(30), { channelMode: 'joint' }),
-    segment(advertSeed, framesFor(advertSeconds), { channelMode: 'stereo' }),
+    segment(advertSeed, framesFor(advertSeconds), { channelMode: cleanSplice ? 'joint' : 'stereo' }),
     segment(90_000, framesFor(30), { channelMode: 'joint' }),
   );
 }
@@ -51,6 +53,7 @@ beforeEach(async () => {
   audioRequests = [];
   advert = 50_000;
   advertSeconds = 20;
+  cleanSplice = false;
 
   server = createServer((req, res) => {
     if (req.url.startsWith('/audio/')) {
@@ -76,12 +79,13 @@ afterEach(async () => {
 });
 
 /** Subscribes, downloads the one episode, and returns the show and the ledger row. */
-async function take({ mode = 'review' } = {}) {
+async function take({ mode = 'review', insertsAudio = false } = {}) {
   const show = app.shows.getBySlug('tape-club');
   app.db.prepare('UPDATE shows SET ad_trim_mode = ? WHERE id = ?').run(mode, show.id);
   const subscription = app.subscriptions.create(show.id, {
     feedUrl: `${origin}/feed.xml`,
     backfillCount: 10,
+    insertsAudio,
   });
   await app.remoteFeeds.pollNow(subscription.id);
   const [item] = app.subscriptions.items({ subscriptionId: subscription.id });
@@ -420,5 +424,60 @@ describe('what the difference is treated as', () => {
 
     const [found] = app.adDetect.listSegments(show.id).filter((row) => row.source === SEGMENT_SOURCES.DIFF);
     assert.equal(found.status, SEGMENT_STATUS.CANDIDATE);
+  });
+});
+
+describe('a host that splices its adverts in without a mark', () => {
+  // Simplecast and Acast, measured on 2026-10-28: the advert is encoded like the
+  // programme, so no stitch signal fires and the second download was never made.
+  beforeEach(() => {
+    cleanSplice = true;
+  });
+
+  it('is not downloaded twice while nothing is known about the host', async () => {
+    const { item } = await take();
+    assert.equal(item.decision, 'downloaded');
+    assert.equal(item.recheck_after, null, 'a clean file was re-downloaded on no evidence');
+  });
+
+  it('is compared a day later once the feed is known to insert, and the advert found', async () => {
+    const { show, item } = await take({ insertsAudio: true });
+    assert.ok(item.recheck_after, 'no second look was planned');
+    assert.match(item.recheck_reason, /inserts audio/);
+    const wait = new Date(item.recheck_after) - Date.now();
+    assert.ok(wait > 23 * 3600_000, `only waiting ${Math.round(wait / 3600_000)}h`);
+
+    advert = 70_000; // the next day's advert
+    makeDue(item.id);
+    await app.remoteFeeds.recheckDue();
+
+    const [after] = app.subscriptions.items({ subscriptionId: item.subscription_id });
+    assert.equal(after.recheck_outcome, 'differs');
+    const diff = app.adDetect.listSegments(show.id).filter((row) => row.source === SEGMENT_SOURCES.DIFF);
+    assert.equal(diff.length, 1);
+    const [occurrence] = diff[0].occurrences;
+    assert.deepEqual([occurrence.start_frame, occurrence.end_frame], [framesFor(30), framesFor(30) + framesFor(20)]);
+    // The same address both times: asked again, never disguised.
+    assert.deepEqual(new Set(audioRequests), new Set(['/audio/a.mp3']));
+  });
+
+  it('learns that the host inserts from a second download that came back different', async () => {
+    cleanSplice = false; // stitch marks this time, so the second look happens anyway
+    const { item, subscription } = await take();
+    assert.equal(app.subscriptions.get(subscription.id).inserts_audio, 0);
+    advert = 70_000;
+    makeDue(item.id);
+    await app.remoteFeeds.recheckDue();
+    assert.equal(app.subscriptions.get(subscription.id).inserts_audio, 1, 'the feed was not marked as one that inserts');
+  });
+
+  it('leaves the feed unmarked when the second download is the same', async () => {
+    cleanSplice = false;
+    const { item, subscription } = await take();
+    makeDue(item.id);
+    await app.remoteFeeds.recheckDue();
+    const [after] = app.subscriptions.items({ subscriptionId: subscription.id });
+    assert.equal(after.recheck_outcome, 'identical');
+    assert.equal(app.subscriptions.get(subscription.id).inserts_audio, 0);
   });
 });

@@ -6,6 +6,7 @@ import { afterEach, describe, it } from 'node:test';
 
 import { SEGMENT_SOURCES, SEGMENT_STATUS } from '../../src/constants.js';
 import { frameProfile } from '../../src/lib/mp3-frames.js';
+import { restamp } from '../helpers/mp3.js';
 import { FIXTURE_DIR } from '../helpers/harness.js';
 import { createTestServer } from '../helpers/http.js';
 import { cannedWhisper, whisperJson } from '../helpers/whisper.js';
@@ -47,8 +48,16 @@ async function makeShow({ mode = 'review', minEpisodes = 3, whisper = null } = {
   return { show: server.shows.get(created.id), dir };
 }
 
+/*
+ * Each episode's copy of a fixture gets header bits of its own (`restamp`): the same
+ * sound, different bytes — a jingle mastered into each episode, as the real one is.
+ * Copied byte for byte, the four files would be audio a host spliced in, which the
+ * copied-frames search cuts before this file's jingle search is ever asked.
+ */
+let episodesAdded = 0;
 async function addEpisode(dir, name, ...parts) {
-  await writeFile(join(dir, name), Buffer.concat(parts));
+  const variant = episodesAdded++ % 8;
+  await writeFile(join(dir, name), Buffer.concat(parts.map((part) => restamp(part, variant))));
   await server.scanner.scanAllNow('manual');
   const show = server.shows.getBySlug('jingle-show');
   return server.episodes.listByShow(show.id).find((row) => row.filename === name);

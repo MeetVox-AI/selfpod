@@ -509,6 +509,9 @@ export const SEGMENT_KINDS = Object.freeze({
   REPEATED_AUDIO: 'repeated_audio',
   DIFF: 'diff',
   TAUGHT_RANGE: 'taught_range',
+  // Audio the host spliced in as it served the file: the same MP3 frames in two or
+  // more episodes, or a break between the slot markers a host stitches (copied-audio.js).
+  INSERTED: 'inserted',
 });
 
 /** The `source` 1.8 would have written for a kind — kept so a rollback can read rows. */

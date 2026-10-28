@@ -149,6 +149,29 @@ function repetitionPhrase(segment, positionLabel) {
 }
 
 /** "40 seconds" / "2:10": how long a stretch of sound is, for a sentence. */
+/** The break a `break:` row stands for, from its slot: pre, post, or mid-N. */
+export function breakSlotName(signature = '') {
+  const slot = signature.startsWith('break:') ? signature.slice('break:'.length) : null;
+  if (!slot) return null;
+  if (slot === 'pre') return 'Pre-roll';
+  if (slot === 'post') return 'Post-roll';
+  const n = Number(slot.replace(/^mid-/, ''));
+  return n > 1 ? `Mid-roll ${n}` : 'Mid-roll';
+}
+
+/**
+ * What an `inserted` row is, in a phrase. Both kinds are the host's own doing, and the
+ * evidence is said plainly because it is the reason SelfPod is sure: a programme is
+ * never the same bytes twice; a break is what sits between the host's markers.
+ */
+function insertedPhrase(segment) {
+  const count = segment.episode_count ?? 0;
+  const episodes = `${count} episode${count === 1 ? '' : 's'}`;
+  const slot = breakSlotName(segment.signature);
+  if (slot) return `${slot} break between the host’s markers, in ${episodes}`;
+  return `The same ${lengthPhrase(segment.duration_ms)} of audio spliced into ${episodes} by the host`;
+}
+
 function lengthPhrase(ms) {
   const seconds = Math.round((ms ?? 0) / 1000);
   return seconds < 90 ? `${seconds} second${seconds === 1 ? '' : 's'}` : formatClock(ms);
@@ -199,6 +222,29 @@ export function describeVerdict(segment, { mode = 'review', positionLabel = null
       verdict: segment.status === 'rejected' ? 'will_leave' : segment.status === 'approved' ? 'will_cut' : 'asking',
       key: 'diff',
       sentence: 'Differs between two downloads of this episode — inserted by the host.',
+      offerMarker: false,
+    };
+  }
+  if (kind === SEGMENT_KINDS.INSERTED) {
+    const what = insertedPhrase(segment);
+    if (segment.status === 'approved') {
+      return {
+        verdict: 'will_cut',
+        key: segment.auto_approved ? 'inserted_auto' : 'inserted_removed',
+        sentence: segment.auto_approved ? `${what}, cut automatically.` : `${what} — you removed it.`,
+        offerMarker: false,
+      };
+    }
+    if (segment.status === 'rejected') {
+      return { verdict: 'will_leave', key: 'inserted_kept', sentence: `${what} — you kept it.`, offerMarker: false };
+    }
+    return {
+      verdict: 'asking',
+      key: segment.hold_reason === 'too_long_to_be_an_advert' ? 'inserted_too_long' : 'inserted',
+      sentence:
+        segment.hold_reason === 'too_long_to_be_an_advert'
+          ? `${what} — longer than any advert, so SelfPod will not cut it unasked.`
+          : `${what}.`,
       offerMarker: false,
     };
   }

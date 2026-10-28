@@ -1,3 +1,5 @@
+import { readFrames } from '../../src/lib/mp3-frames.js';
+
 /**
  * Builds MP3 files frame by frame, for tests.
  *
@@ -14,13 +16,19 @@
 const FRAME_BYTES = 417;
 export const FRAME_MS = (1152 / 44100) * 1000;
 
-function frameHeader(channelMode = 'joint', bitrateIndex = 9, sampleRateIndex = 0) {
+/**
+ * `variant` sets the private, copyright and original bits (0–7): flags a decoder
+ * ignores, so the audio is the same while the bytes are not. That is what a real
+ * programme's repeated theme is from one episode to the next — the same sound, encoded
+ * afresh — and what a host's spliced-in advert is not (copied-audio.js).
+ */
+function frameHeader(channelMode = 'joint', bitrateIndex = 9, sampleRateIndex = 0, variant = 0) {
   const modes = { stereo: 0, joint: 1, dual: 2, mono: 3 };
   return Buffer.from([
     0xff,
     0xfb, // MPEG-1, Layer III, no CRC
-    (bitrateIndex << 4) | (sampleRateIndex << 2),
-    (modes[channelMode] << 6) | 0x00,
+    (bitrateIndex << 4) | (sampleRateIndex << 2) | (variant & 4 ? 0x01 : 0),
+    (modes[channelMode] << 6) | (variant & 1 ? 0x08 : 0) | (variant & 2 ? 0x04 : 0),
   ]);
 }
 
@@ -30,8 +38,8 @@ function frameHeader(channelMode = 'joint', bitrateIndex = 9, sampleRateIndex = 
  * Deterministic so a test can rebuild the same "advert" twice, and distinct across
  * seeds so two different frames never hash alike by construction.
  */
-export function frame(seed, { channelMode = 'joint', bitrateIndex = 9 } = {}) {
-  const header = frameHeader(channelMode, bitrateIndex);
+export function frame(seed, { channelMode = 'joint', bitrateIndex = 9, variant = 0 } = {}) {
+  const header = frameHeader(channelMode, bitrateIndex, 0, variant);
   const payload = Buffer.alloc(FRAME_BYTES - 4);
   let x = (seed * 2654435761) >>> 0;
   for (let i = 0; i < payload.length; i += 1) {
@@ -68,4 +76,19 @@ export function id3v2(payloadSize = 100) {
   header[9] = payloadSize & 0x7f;
   // Filled with a byte that is not 0xFF, so nothing inside the tag looks like audio.
   return Buffer.concat([header, Buffer.alloc(payloadSize, 0x41)]);
+}
+
+/**
+ * The same audio, different bytes: a real MP3 with `variant` written into every frame
+ * header the way `frame()` writes it. For a fixture file repeated across episodes that
+ * stands for audio a programme carries — re-encoded every episode — rather than a file a
+ * host splices in unchanged.
+ */
+export function restamp(buffer, variant) {
+  const out = Buffer.from(buffer);
+  for (const frame of readFrames(out).frames) {
+    out[frame.offset + 2] = (out[frame.offset + 2] & 0xfe) | (variant & 4 ? 0x01 : 0);
+    out[frame.offset + 3] = (out[frame.offset + 3] & 0xf3) | (variant & 1 ? 0x08 : 0) | (variant & 2 ? 0x04 : 0);
+  }
+  return out;
 }
