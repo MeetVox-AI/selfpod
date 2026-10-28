@@ -382,7 +382,7 @@ Reading the words is the slow part of a pass. With an NVIDIA card, use the GPU i
 instead of the regular one — same app, same data, different tag:
 
 ```
-ghcr.io/meetvox-ai/selfpod:1.10.1-cuda
+ghcr.io/meetvox-ai/selfpod:1.11.0-cuda
 ```
 
 It is amd64 only, about two and a half gigabytes, and uses the `small` model by default,

@@ -8,6 +8,52 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.11.0 — 2026-10-28
+
+### Added — adverts a host inserts as it serves, whatever their language
+
+Hosts such as Simplecast and Acast stitch adverts into the audio as each episode is
+downloaded, chosen by the listener's country: a French show fetched from the UK carries
+English adverts, from Germany German ones. SelfPod now finds them by what every inserted
+advert has in common — the host splices in a file it already has, so **the same advert is
+the same bytes in every episode it lands in**, while the programme, encoded afresh each
+time, never is. No language, no country, no proxy.
+
+- **Copied audio.** A stretch whose MP3 frames are identical in two or more episodes is cut.
+  On RMC this is the Banque Populaire opener (with "Vous écoutez RMC", which is part of the
+  same inserted file) and closer, found in 30 of 30 episodes.
+- **Breaks between markers.** Acast stitches a short clip at both edges of every break;
+  SelfPod cuts what lies between, including adverts never heard in any other episode. Shown
+  on the Adverts page as *Pre-roll*, *Mid-roll* and *Post-roll* breaks, each with
+  *Restore here*.
+- **A second download for feeds whose host inserts.** Every new episode is downloaded once
+  more a day later — same address, same user agent — and what changed is cut. SelfPod turns
+  this on by itself once it has seen the host insert; the subscription form has the switch.
+- In automatic mode these are cut without asking, except anything over two and a half
+  minutes and a stretch only two episodes share mid-file (a "best of" could share programme
+  that way), which are offered instead.
+- `node scripts/check-copied-audio.mjs <folder>` shows what it finds in episodes you
+  downloaded yourself.
+
+### Fixed
+
+- **The jingle search could cut a show's spoken intro.** On a show whose own theme follows
+  the host's introduction (Le Rendez-vous Tech), it took the theme for the station jingle,
+  confirmed it by itself in automatic mode, and cut everything before it — up to 1:33 of
+  every episode. A jingle that starts well after the host's inserted audio has ended is no
+  longer confirmed automatically; it stays a suggestion. One SelfPod confirmed by itself
+  before is taken back on the next pass that has something new to look at, and the
+  episodes are cut again without it. A jingle you confirmed is never touched.
+
+### Upgrading
+
+- Change the image tag to `1.11.0` (or `1.11.0-cuda`) and redeploy. Migration 014 runs on
+  start; it rebuilds the advert catalogue tables with every row kept, as 009 did.
+- Episodes already fingerprinted are read once more on the first pass, without decoding, to
+  keep their frame hashes — a few seconds a show, not the minutes a fingerprint costs.
+- Automatic mode will start cutting inserted openers and closers it previously held as
+  "a theme or a read". Each is on the Adverts page with *Restore here*.
+
 ## 1.10.1 — 2026-10-23
 
 ### Security
