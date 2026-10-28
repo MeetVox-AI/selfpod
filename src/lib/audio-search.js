@@ -1,7 +1,8 @@
 import { Worker } from 'node:worker_threads';
 
 import { findHeadAnchors } from './audio-anchor.js';
-import { decodeWindowToWav, fingerprintFile, profileFile } from './audio-tasks.js';
+import { decodeWindowToWav, fingerprintFile, frameHashesFile, profileFile } from './audio-tasks.js';
+import { findCopiedAudio } from './copied-audio.js';
 import { findRepeatedAudio } from './repeated-audio.js';
 
 const WORKER_URL = new URL('../workers/audio-search.js', import.meta.url);
@@ -113,6 +114,13 @@ export function createAudioWorker({ logger = null, inline = false, fileTimeoutMs
     },
     headAnchors(episodes, options) {
       return run('headAnchors', { episodes, options }, () => findHeadAnchors(episodes, options));
+    },
+    copiedAudio(episodes, options) {
+      return run('copiedAudio', { episodes, options }, () => findCopiedAudio(episodes, options));
+    },
+    /** @see frameHashesFile in audio-tasks.js */
+    frameHashesFile(payload) {
+      return run('frameHashesFile', payload, () => unwrap(() => frameHashesFile(payload)), { timeoutMs: fileTimeoutMs });
     },
     /** @see fingerprintFile in audio-tasks.js */
     fingerprintFile(payload) {

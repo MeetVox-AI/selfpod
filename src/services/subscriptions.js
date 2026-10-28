@@ -57,11 +57,11 @@ export function createSubscriptions({ db, config, events, logger }) {
     `INSERT INTO feed_subscriptions
        (id, show_id, feed_url, remote_title, enabled, include_keywords, exclude_keywords,
         min_duration_seconds, max_duration_seconds, backfill_count, catch_up_mode,
-        poll_interval_seconds, next_poll_at, created_at, updated_at)
+        poll_interval_seconds, inserts_audio, next_poll_at, created_at, updated_at)
      VALUES
        (@id, @show_id, @feed_url, @remote_title, @enabled, @include_keywords, @exclude_keywords,
         @min_duration_seconds, @max_duration_seconds, @backfill_count, @catch_up_mode,
-        @poll_interval_seconds, @next_poll_at, @created_at, @updated_at)`,
+        @poll_interval_seconds, @inserts_audio, @next_poll_at, @created_at, @updated_at)`,
   );
 
   const selectDue = db.prepare(
@@ -227,6 +227,13 @@ export function createSubscriptions({ db, config, events, logger }) {
       fields.enabled = isTrue(patch.enabled) ? 1 : 0;
     }
 
+    // The host inserts audio as it serves: every new episode is downloaded a second time
+    // a day later and compared (spec §19.3). SelfPod sets it on its own the first time it
+    // sees the host do so; this is the owner saying so first, or changing their mind.
+    if (patch.insertsAudio !== undefined) {
+      fields.inserts_audio = isTrue(patch.insertsAudio) ? 1 : 0;
+    }
+
     if (patch.catchUpMode !== undefined) {
       const mode = String(patch.catchUpMode);
       if (!['resume', 'catch_up'].includes(mode)) {
@@ -297,6 +304,7 @@ export function createSubscriptions({ db, config, events, logger }) {
         backfill_count: fields.backfill_count ?? DEFAULT_BACKFILL_COUNT,
         catch_up_mode: fields.catch_up_mode ?? 'resume',
         poll_interval_seconds: fields.poll_interval_seconds ?? null,
+        inserts_audio: fields.inserts_audio ?? 0,
         // Due immediately: someone who has just pasted a URL wants to see it work.
         next_poll_at: null,
         created_at: nowIso(),
@@ -323,6 +331,11 @@ export function createSubscriptions({ db, config, events, logger }) {
      * complete download to reach, and re-opening it on a one-character keyword edit
      * would silently re-fetch gigabytes. The UI offers it as an explicit action instead.
      */
+    /** What a second download that came back different proves: the host inserts. */
+    markInsertsAudio(id) {
+      db.prepare('UPDATE feed_subscriptions SET inserts_audio = 1, updated_at = ? WHERE id = ? AND inserts_audio = 0').run(nowIso(), id);
+    },
+
     update(id, patch = {}) {
       const existing = api.getOrThrow(id);
       const fields = validate(patch, { partial: true, existing });

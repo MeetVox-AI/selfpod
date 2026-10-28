@@ -365,7 +365,8 @@ describe('when an episode or a show goes', () => {
     await app.adDetect.fingerprintShow(show.id);
     const { readdir } = await import('node:fs/promises');
     assert.equal((await readdir(join(app.config.trimmedDir, show.id))).length, 3);
-    assert.equal((await readdir(join(app.config.fingerprintDir, show.id))).length, 3);
+    // A fingerprint and the frame hashes beside it, per episode.
+    assert.equal((await readdir(join(app.config.fingerprintDir, show.id))).length, 6);
 
     const [episode] = app.episodes.listByShow(show.id);
     await app.episodes.deleteWithFile(episode.id);
@@ -375,7 +376,7 @@ describe('when an episode or a show goes', () => {
       2,
       'a deleted episode left its trimmed copy behind',
     );
-    assert.equal((await readdir(join(app.config.fingerprintDir, show.id))).length, 2);
+    assert.equal((await readdir(join(app.config.fingerprintDir, show.id))).length, 4);
 
     await app.shows.remove(show.id, { deleteFiles: false });
 

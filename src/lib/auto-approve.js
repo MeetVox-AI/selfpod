@@ -54,6 +54,18 @@ function positionGuard(segment, episodeDurations) {
   return null;
 }
 
+/** Whether every occurrence touches the start or the end of its episode — a pre- or post-roll. */
+function atAnEdgeEverywhere(segment, episodeDurations) {
+  const durations = episodeDurations ?? {};
+  const occurrences = segment.occurrences ?? [];
+  if (!occurrences.length) return false;
+  return occurrences.every((occurrence) => {
+    if ((occurrence.startMs ?? Infinity) < 1000) return true;
+    const total = durations[occurrence.episodeId];
+    return Boolean(total) && total - (occurrence.endMs ?? 0) < 1000;
+  });
+}
+
 export function safeToApproveAutomatically(
   segment,
   { episodeDurations, minEpisodes = 3, source = 'corpus' } = {},
@@ -78,6 +90,43 @@ export function safeToApproveAutomatically(
     const diffSeconds = segment.durationMs ? segment.durationMs / 1000 : null;
     if (diffSeconds !== null && diffSeconds > DIFF_MAX_SECONDS) {
       return { safe: false, reason: 'too_long_to_be_an_advert' };
+    }
+    return { safe: true, reason: null };
+  }
+
+  /*
+   * Audio the host spliced in: the same MP3 frames in two or more episodes, or a break
+   * between the markers a host stitches around one (copied-audio.js). Safe by
+   * construction for the reason a diff is: a programme is mastered and encoded once per
+   * episode, so its theme tune never comes out as the same frames twice — only a file
+   * the host already had and concatenated in does. So the position guards are not
+   * applied (RMC's inserted opener sits at 0:00 in every episode, which is exactly what
+   * they would refuse), and neither is the fifteen-second minimum (its closer is ten).
+   *
+   * The length guard still applies, for the diff's reason: what a host inserts is its
+   * choice, and two and a half minutes of it is more likely a re-used programme
+   * segment than a break. A copied stretch must also really be in two episodes; a
+   * break carries its markers as its evidence instead.
+   */
+  if (source === 'inserted') {
+    const seconds = segment.durationMs ? segment.durationMs / 1000 : null;
+    if (seconds !== null && seconds > DIFF_MAX_SECONDS) return { safe: false, reason: 'too_long_to_be_an_advert' };
+    if (segment.betweenMarkers) return { safe: true, reason: null };
+    if ((segment.episodeCount ?? 0) < 2) return { safe: false, reason: 'only_heard_once' };
+    /*
+     * In exactly two episodes, and somewhere in the middle of them, a copy has one other
+     * innocent explanation: a "best of" assembled from an earlier episode's file without
+     * re-encoding it, which shares a stretch of *programme* with that episode byte for
+     * byte. RMC's best-ofs were re-encoded (30 episodes checked, 2026-10-28), but nothing
+     * makes every publisher do that. An advert a host inserts reaches a third episode
+     * soon enough, or sits where a host puts one — at the very start or end of the file
+     * — so only that shape is cut unasked; the rest is offered.
+     */
+    // At the edges, a minute at most: a pre- or post-roll is that, and a longer stretch
+    // two episodes share at their edges is as likely a recap or a reused segment.
+    const shortEdge = seconds !== null && seconds <= 60 && atAnEdgeEverywhere(segment, episodeDurations);
+    if ((segment.episodeCount ?? 0) < 3 && !shortEdge) {
+      return { safe: false, reason: 'seen_too_few_times' };
     }
     return { safe: true, reason: null };
   }

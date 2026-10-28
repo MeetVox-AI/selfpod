@@ -135,6 +135,28 @@ describe('following a feed without JavaScript', () => {
   });
 });
 
+describe('saying the host inserts audio', () => {
+  it('is saved from the switch, and turned off again by leaving it off', async () => {
+    // A switch that is off posts nothing at all, and this form posts every field — so
+    // "absent" has to mean off, or the switch could be turned on and never off.
+    await post('/ui/shows/tape-club/subscription', { feedUrl: `${origin}/feed.xml`, backfillCount: '10', insertsAudio: '1' });
+    assert.equal(server.subscriptions.getForShow(show.id).inserts_audio, 1);
+
+    const page = await server.get('/shows/tape-club/subscription');
+    assert.match(page.body, /id="f-inserts"[^>]*checked/, 'the form does not show it on');
+
+    await post('/ui/shows/tape-club/subscription', { feedUrl: `${origin}/feed.xml`, backfillCount: '10' });
+    assert.equal(server.subscriptions.getForShow(show.id).inserts_audio, 0);
+  });
+
+  it('uses no name an ad blocker hides', async () => {
+    // EasyList blanked the whole Adverts page once over a class called ad-panel.
+    const page = await server.get('/shows/tape-club/subscription');
+    const names = [...page.body.matchAll(/\b(?:id|class)="([^"]*)"/g)].flatMap((m) => m[1].split(/\s+/));
+    assert.deepEqual(names.filter((name) => /(^|[-_])(ad|ads|advert|sponsor)([-_]|$)/i.test(name)), []);
+  });
+});
+
 describe('following a feed with htmx', () => {
   it('returns the re-rendered form rather than a redirect', async () => {
     const response = await post(

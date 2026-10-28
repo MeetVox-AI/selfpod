@@ -416,16 +416,34 @@ correctly, and proved on a GPU only on real hardware.
 
 ### Adverts a host inserts as it serves
 
-Some podcasts insert adverts into the audio as it is downloaded, so the file is
-different every time. SelfPod can spot these by downloading one episode a second
-time, a day later, and comparing: whatever changed cannot be the theme tune, so it
-is an advert by construction.
+Some hosts — Simplecast, Acast and others — insert adverts into the audio as it is
+downloaded, picked by the listener's country and by chance. A French show fetched from
+the UK carries English adverts; from Germany, German ones. So SelfPod does not look for
+a language or a country. It looks for what every inserted advert has in common: the
+host splices in a file it already has, so **the same advert is the same bytes in every
+episode it lands in** — while the programme, encoded afresh each time, never is.
 
-This is done sparingly and on purpose. A second download counts again in the
-publisher's listener figures, so SelfPod only does it for episodes whose audio shows
-positive signs of having been stitched together, never sooner than a day, and only a
-couple at a time. It will not disguise itself to defeat a host's caching — that
-would be interfering with the publisher's measurement, which is not SelfPod's to do.
+- **Copied audio.** A stretch whose frames are byte for byte the same in two or more
+  episodes is cut. RMC's sponsor opener and closer are found this way in every episode.
+- **Breaks between markers.** Hosts like Acast stitch a short clip at both edges of
+  every break. SelfPod finds those markers and cuts what lies between them — even
+  adverts it has never heard before. Shown as *Pre-roll*, *Mid-roll* and *Post-roll*
+  breaks on the Adverts page, each with *Restore here*.
+- **A second download, a day later.** For a feed whose host inserts, every new episode
+  is downloaded once more and compared, to learn adverts that rotate. SelfPod turns
+  this on by itself once it has seen the host insert; the subscription form has the
+  switch too. Each second download counts again in the publisher's figures.
+
+In automatic mode these are cut without asking, with two exceptions that are offered
+instead: anything over two and a half minutes, and a stretch only two episodes share in
+the middle (a "best of" could share real programme that way). SelfPod never disguises
+itself to see different adverts — a proxy would only swap which adverts arrive.
+
+To see what it finds in episodes you downloaded yourself:
+
+```bash
+node scripts/check-copied-audio.mjs path/to/folder-of-mp3s
+```
 
 Only for `.mp3` at present. Other formats are published untouched.
 

@@ -30,9 +30,10 @@ async function makeShow() {
       join(showDir, `episode-${n}.mp3`),
       stitch(
         segment(100_000 + n * 50_000, framesFor(40)),
-        segment(2_000, framesFor(30)),
+        // The same sound in each episode, re-encoded each time: see `variant` in helpers/mp3.js.
+        segment(2_000, framesFor(30), { variant: n % 8 }),
         segment(600_000 + n * 50_000, framesFor(40)),
-        segment(3_000, framesFor(25)),
+        segment(3_000, framesFor(25), { variant: n % 8 }),
       ),
     );
   }

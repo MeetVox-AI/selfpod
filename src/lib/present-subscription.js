@@ -29,6 +29,7 @@ export function presentSubscription(subscription, { subscriptions }) {
     minDurationSeconds: subscription.min_duration_seconds,
     maxDurationSeconds: subscription.max_duration_seconds,
     backfillCount: subscription.backfill_count,
+    insertsAudio: Boolean(subscription.inserts_audio),
     bootstrapped: Boolean(subscription.bootstrapped_at),
     pollIntervalSeconds: subscription.poll_interval_seconds,
     lastPolledAt: subscription.last_polled_at,

@@ -65,11 +65,15 @@ export async function fingerprintFile({ path, maxBytes, expectSha256 = null }) {
   const decoded = await decodeToMono(bytes, profile.frames, (samples) => fingerprinter.push(samples));
   const hashes = fingerprinter.finish();
 
+  // The frames' own hashes come free with the profile, and they are what finds audio a
+  // host spliced in byte for byte (copied-audio.js) — so they travel with the fingerprint.
+  const frameHashes = Uint32Array.from(profile.hashes);
   return {
     result: {
       sha256,
       bytes: bytes.length,
       hashes,
+      frameHashes,
       frameCount: profile.frameCount,
       durationMs: profile.durationMs,
       sampleRate: profile.sampleRate,
@@ -77,7 +81,41 @@ export async function fingerprintFile({ path, maxBytes, expectSha256 = null }) {
       decodeErrors: decoded.errors,
       discontinuities: profile.discontinuities.length,
     },
-    transfer: [hashes.buffer],
+    transfer: [hashes.buffer, frameHashes.buffer],
+  };
+}
+
+/**
+ * Reads an episode and hashes its MP3 frames, without decoding a sample.
+ *
+ * For an episode fingerprinted before frame hashes were kept: the fingerprint is still
+ * good, and decoding an hour of audio again to get at hashes of bytes the file already
+ * holds would be a minute of a NAS's time per episode for nothing.
+ */
+export async function frameHashesFile({ path, maxBytes }) {
+  const { handle, size } = await openGatedFile(path, { maxBytes });
+  let bytes;
+  try {
+    bytes = await readRange(handle, 0, size);
+  } finally {
+    await handle.close();
+  }
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  const profile = frameProfile(bytes);
+  if (!profile) return { result: { sha256, bytes: bytes.length, noFrames: true } };
+  if (profile.truncated) return { result: { sha256, bytes: bytes.length, tooLong: true } };
+  const frameHashes = Uint32Array.from(profile.hashes);
+  return {
+    result: {
+      sha256,
+      bytes: bytes.length,
+      frameHashes,
+      frameCount: profile.frameCount,
+      durationMs: profile.durationMs,
+      sampleRate: profile.sampleRate,
+      samplesPerFrame: profile.frames[0]?.samplesPerFrame ?? 1152,
+    },
+    transfer: [frameHashes.buffer],
   };
 }
 

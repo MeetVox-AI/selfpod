@@ -115,3 +115,45 @@ export function msToFrame(ms, { sampleRate, samplesPerFrame }) {
   if (!sampleRate || !samplesPerFrame) return 0;
   return Math.floor((ms * sampleRate) / (samplesPerFrame * 1000));
 }
+
+/*
+ * MP3 frame hashes, kept beside the fingerprint (spec §19.3).
+ *
+ * A file of their own, not a field of the fingerprint, so that adding them did not
+ * invalidate every fingerprint already computed: those cost a full decode each, and
+ * these cost only a read. Same header layout, its own magic and version.
+ */
+const FRAMES_MAGIC = 0x53504648; // "SPFH"
+export const FRAME_HASHES_VERSION = 1;
+
+/** @param {{hashes: Uint32Array|number[], sampleRate: number, samplesPerFrame: number, durationMs: number}} frames */
+export function encodeFrameHashes({ hashes, sampleRate, samplesPerFrame, durationMs }) {
+  const buffer = Buffer.alloc(HEADER_BYTES + hashes.length * 4);
+  buffer.writeUInt32BE(FRAMES_MAGIC, 0);
+  buffer.writeUInt32BE(FRAME_HASHES_VERSION, 4);
+  buffer.writeUInt32BE(hashes.length, 8);
+  buffer.writeUInt32BE(sampleRate || 0, 12);
+  buffer.writeUInt32BE(samplesPerFrame || 0, 16);
+  buffer.writeUInt32BE(Math.min(durationMs || 0, 0xffffffff), 20);
+  buffer.writeUInt32BE(0, 24);
+  for (let i = 0; i < hashes.length; i += 1) buffer.writeUInt32BE(hashes[i] >>> 0, HEADER_BYTES + i * 4);
+  return buffer;
+}
+
+/** Reads a frame-hash file, or null for anything it does not recognise — it is a cache. */
+export function decodeFrameHashes(buffer) {
+  if (!buffer || buffer.length < HEADER_BYTES) return null;
+  if (buffer.readUInt32BE(0) !== FRAMES_MAGIC) return null;
+  if (buffer.readUInt32BE(4) !== FRAME_HASHES_VERSION) return null;
+  const count = buffer.readUInt32BE(8);
+  if (buffer.length < HEADER_BYTES + count * 4) return null;
+  const bytes = new Uint8Array(count * 4);
+  bytes.set(buffer.subarray(HEADER_BYTES, HEADER_BYTES + count * 4));
+  if (LITTLE_ENDIAN) Buffer.from(bytes.buffer, 0, bytes.length).swap32();
+  return {
+    hashes: new Uint32Array(bytes.buffer, 0, count),
+    sampleRate: buffer.readUInt32BE(12) || null,
+    samplesPerFrame: buffer.readUInt32BE(16) || null,
+    durationMs: buffer.readUInt32BE(20) || null,
+  };
+}

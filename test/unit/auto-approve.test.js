@@ -62,3 +62,66 @@ describe('a segment found by ear, once the words are known', () => {
     assert.deepEqual(safeToApproveAutomatically(theme, options), { safe: false, reason: 'always_at_the_start' });
   });
 });
+
+describe('audio the host inserted, found by its frames', () => {
+  // RMC's real opener: 13.9 s at 0:00 of every episode. The acoustic branch refuses it
+  // twice over — at the start, and under fifteen seconds — and is right to: a theme tune
+  // has exactly that shape. Copied frames are what tell the two apart.
+  const opener = () => segment({ startMs: 0, durationMs: 13_900 });
+
+  it('cuts an opener at 0:00 that the acoustic branch would hold as a theme tune', () => {
+    assert.equal(safeToApproveAutomatically(opener(), { episodeDurations: durations }).safe, false);
+    assert.deepEqual(safeToApproveAutomatically(opener(), { source: 'inserted' }), { safe: true, reason: null });
+  });
+
+  it('cuts a closer of ten seconds, under the acoustic floor', () => {
+    const closer = segment({ startMs: 590_000, durationMs: 10_100 });
+    assert.equal(safeToApproveAutomatically(closer, { source: 'inserted' }).safe, true);
+  });
+
+  it('offers a copy in exactly two episodes, mid-file — a best-of may reuse programme so', () => {
+    const twice = segment({ episodes: ['a', 'b'], startMs: 200_000, durationMs: 45_000 });
+    assert.deepEqual(
+      safeToApproveAutomatically(twice, { source: 'inserted', episodeDurations: durations }),
+      { safe: false, reason: 'seen_too_few_times' },
+    );
+  });
+
+  it('cuts a copy in two episodes where a host puts one: the very start, or the very end', () => {
+    const preRoll = segment({ episodes: ['a', 'b'], startMs: 0, durationMs: 30_000 });
+    const postRoll = segment({ episodes: ['a', 'b'], startMs: 570_000, durationMs: 30_000 });
+    for (const copy of [preRoll, postRoll]) {
+      assert.equal(safeToApproveAutomatically(copy, { source: 'inserted', episodeDurations: durations }).safe, true);
+    }
+  });
+
+  it('offers a copy in two episodes at their edges when it runs over a minute', () => {
+    // A recap or a reused segment opening one episode and closing another.
+    const long = segment({ episodes: ['a', 'b'], startMs: 0, durationMs: 90_000 });
+    assert.deepEqual(
+      safeToApproveAutomatically(long, { source: 'inserted', episodeDurations: durations }),
+      { safe: false, reason: 'seen_too_few_times' },
+    );
+  });
+
+  it('cuts a copy mid-file once it reaches a third episode', () => {
+    const thrice = segment({ episodes: ['a', 'b', 'c'], startMs: 200_000, durationMs: 45_000 });
+    assert.equal(safeToApproveAutomatically(thrice, { source: 'inserted', episodeDurations: durations }).safe, true);
+  });
+
+  it('holds a copy that is not really in two episodes', () => {
+    const once = segment({ episodes: ['a'], startMs: 0, durationMs: 20_000 });
+    assert.deepEqual(safeToApproveAutomatically(once, { source: 'inserted' }), { safe: false, reason: 'only_heard_once' });
+  });
+
+  it('cuts a break between markers, whose markers are its evidence', () => {
+    const block = { durationMs: 72_300, episodeCount: 1, betweenMarkers: true };
+    assert.equal(safeToApproveAutomatically(block, { source: 'inserted' }).safe, true);
+  });
+
+  it('holds anything longer than two and a half minutes, however it was found', () => {
+    for (const evidence of [segment({ durationMs: 151_000 }), { durationMs: 151_000, episodeCount: 1, betweenMarkers: true }]) {
+      assert.deepEqual(safeToApproveAutomatically(evidence, { source: 'inserted' }), { safe: false, reason: 'too_long_to_be_an_advert' });
+    }
+  });
+});

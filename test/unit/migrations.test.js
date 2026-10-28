@@ -443,3 +443,100 @@ describe('migration 012 indexes the advert tables\' foreign keys', () => {
     assert.match(plan, /idx_ad_segments_anchor/, `a lookup by anchor does not use the index: ${plan}`);
   });
 });
+
+/**
+ * Migration 014 rebuilds the catalogue again, to let `kind` say `inserted`. The same
+ * stake as 009: a rebuild that dropped a decision, an occurrence or a restore would
+ * republish adverts the owner removed, or remove audio they put back — silently.
+ */
+describe('migration 014 lets the catalogue hold inserted audio without losing anything', () => {
+  function seededAt013() {
+    const db = seededAt010();
+    runMigrations(db, { upTo: 13 });
+    assert.equal(db.pragma('user_version', { simple: true }), 13);
+    db.prepare(
+      `INSERT INTO ad_cut_overrides (id, episode_id, segment_id, start_ms, end_ms, created_at)
+       VALUES ('restore', 'e1', 'audio', 0, 9000, '2026-10-01T00:00:00.000Z')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO feed_subscriptions (id, show_id, feed_url, created_at, updated_at)
+       VALUES ('sub', 's1', 'https://example.com/feed.xml', 'x', 'x')`,
+    ).run();
+    return db;
+  }
+
+  const snapshot = (db) => ({
+    segments: db.prepare('SELECT * FROM ad_segments ORDER BY id').all(),
+    occurrences: db.prepare('SELECT * FROM ad_segment_occurrences ORDER BY id').all(),
+    overrides: db.prepare('SELECT * FROM ad_cut_overrides ORDER BY id').all(),
+  });
+
+  it('keeps every segment, occurrence and restore exactly as it was', () => {
+    const db = seededAt013();
+    const before = snapshot(db);
+    // Eight rows of every kind 1.10 writes (011 tidied two of the ten seeded away), one restore.
+    assert.deepEqual([before.segments.length, before.occurrences.length, before.overrides.length], [8, 8, 1]);
+    runMigrations(db, { upTo: 14 });
+    assert.equal(db.pragma('user_version', { simple: true }), 14);
+    assert.deepEqual(snapshot(db), before);
+    assert.deepEqual(db.pragma('foreign_key_check'), []);
+  });
+
+  it('accepts the new kind and still refuses one that does not exist', () => {
+    const db = seededAt013();
+    runMigrations(db, { upTo: 14 });
+    const insert = db.prepare(
+      `INSERT INTO ad_segments (id, show_id, signature, source, status, duration_ms, first_seen_at, created_at, updated_at, kind)
+       VALUES (?, 's1', ?, 'corpus', 'candidate', 1000, 'x', 'x', 'x', ?)`,
+    );
+    insert.run('ins', 'copied:abc', 'inserted');
+    assert.throws(() => insert.run('bad', 'copied:def', 'not_a_kind'), /CHECK constraint failed/);
+  });
+
+  it('points the children at the rebuilt table: deleting a row cascades and releases its restore', () => {
+    const db = seededAt013();
+    runMigrations(db, { upTo: 14 });
+    for (const table of ['ad_segment_occurrences', 'ad_cut_overrides']) {
+      const targets = db.pragma(`foreign_key_list(${table})`).filter((fk) => fk.from === 'segment_id').map((fk) => fk.table);
+      assert.deepEqual(targets, ['ad_segments'], `${table} points at ${targets}`);
+    }
+    db.prepare(`DELETE FROM ad_segments WHERE id = 'audio'`).run();
+    assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM ad_segment_occurrences WHERE segment_id = 'audio'`).get().n, 0);
+    assert.equal(db.prepare(`SELECT segment_id FROM ad_cut_overrides WHERE id = 'restore'`).get().segment_id, null);
+  });
+
+  it('keeps the indexes, continues the occurrence ids, and flags no subscription yet', () => {
+    const db = seededAt013();
+    const lastId = db.prepare('SELECT MAX(id) AS id FROM ad_segment_occurrences').get().id;
+    runMigrations(db, { upTo: 14 });
+    for (const name of [
+      'idx_ad_segments_show', 'idx_ad_segments_kind', 'idx_ad_segments_marker', 'idx_ad_segments_anchor',
+      'idx_ad_occurrences_episode', 'idx_ad_cut_overrides_episode', 'idx_ad_cut_overrides_segment',
+    ]) {
+      assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?").get(name), `${name} is missing`);
+    }
+    const next = db
+      .prepare(`INSERT INTO ad_segment_occurrences (segment_id, episode_id, start_frame, end_frame, start_ms, end_ms)
+                VALUES ('diff', 'e2', 0, 10, 0, 261)`)
+      .run().lastInsertRowid;
+    assert.ok(Number(next) > lastId, 'a new occurrence reused an id');
+    assert.equal(db.prepare(`SELECT inserts_audio FROM feed_subscriptions WHERE id = 'sub'`).get().inserts_audio, 0);
+  });
+
+  it('still takes the statements 1.10 runs, so rolling back is harmless', () => {
+    const db = seededAt013();
+    runMigrations(db, { upTo: 14 });
+    // What 1.10's upsertSegment and reconcileKinds write, unchanged.
+    db.prepare(
+      `INSERT INTO ad_segments (id, show_id, signature, source, status, auto_approved, hold_reason, duration_ms,
+         episode_count, occurrence_count, exemplar_episode_id, exemplar_start_ms, exemplar_end_ms,
+         first_seen_at, created_at, updated_at, kind)
+       VALUES ('old', 's1', 'feedfacefeedfacefeedface', 'corpus', 'candidate', 0, NULL, 5000, 2, 2, 'e1', 0, 5000,
+               'x', 'x', 'x', 'repeated_audio')`,
+    ).run();
+    db.prepare(
+      `UPDATE ad_segments SET kind = 'diff' WHERE show_id = 's1' AND kind = 'repeated_audio' AND source = 'diff'`,
+    ).run();
+    assert.equal(db.prepare(`SELECT kind FROM ad_segments WHERE id = 'old'`).get().kind, 'repeated_audio');
+  });
+});

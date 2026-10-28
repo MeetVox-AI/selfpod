@@ -5,6 +5,7 @@ import { escapeHtml } from '../lib/html.js';
 import { presentSegment, describeComparability } from '../lib/present-segment.js';
 import {
   describeAdvertStage,
+  breakSlotName,
   describeListenScope,
   describeVerdict,
   flattenTranscript,
@@ -749,7 +750,11 @@ export function createAdvertsView({ db, config = null, adDetect, transcriber, ep
             ? `${formatClock(segment.duration_ms)} you marked as an advert`
             : segment.kind === SEGMENT_KINDS.DIFF
               ? `${formatClock(segment.duration_ms)} inserted by the host`
-              : words ?? `${formatClock(segment.duration_ms)} of repeated sound`;
+              : segment.kind === SEGMENT_KINDS.INSERTED
+                ? breakSlotName(segment.signature)
+                  ? `${breakSlotName(segment.signature)} breaks between the host’s markers`
+                  : `${formatClock(segment.duration_ms)} spliced in by the host`
+                : words ?? `${formatClock(segment.duration_ms)} of repeated sound`;
         rows.push({
           key: segment.id,
           kind: segment.kind,

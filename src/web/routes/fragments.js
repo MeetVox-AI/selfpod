@@ -633,6 +633,8 @@ export default async function fragmentRoutes(fastify, services) {
         minDurationSeconds: minutesToSeconds(body.minDurationMinutes),
         maxDurationSeconds: minutesToSeconds(body.maxDurationMinutes),
         backfillCount: body.backfillCount,
+        // A switch posts nothing when it is off, and this form always posts every field.
+        insertsAudio: body.insertsAudio === '1' || body.insertsAudio === 'on',
       };
       const existing = services.subscriptions.getForShow(show.id);
 

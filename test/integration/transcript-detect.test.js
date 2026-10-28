@@ -304,7 +304,8 @@ describe('hearing a sponsor read in the words', () => {
 describe('a pre-roll first found by ear', () => {
   /** Programme of its own, with the same forty-second pre-roll audio in front. */
   function withPreRoll(n) {
-    return stitch(segment(2_000, framesFor(40)), segment(500_000 + n * 60_000, framesFor(30)));
+    // Re-encoded per episode (`variant`, helpers/mp3.js): found by ear, as the test says.
+    return stitch(segment(2_000, framesFor(40), { variant: n % 8 }), segment(500_000 + n * 60_000, framesFor(30)));
   }
   const preRollWords = (n) =>
     whisperJson([

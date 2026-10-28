@@ -208,7 +208,7 @@ export function createAdPipeline({
     if (!activity) return;
     const refused = counts.refused ?? [];
     if (
-      !counts.found && !counts.trimmed && !counts.failed && !counts.released &&
+      !counts.found && !counts.inserted && !counts.trimmed && !counts.failed && !counts.released &&
       !counts.transcribed && !counts.heard && !counts.rememberedCuts && !counts.markerCuts &&
       !counts.transcriptionFailed && !counts.foldedIn && !counts.anchorProposed && !counts.anchorMissed &&
       !refused.length
@@ -217,6 +217,9 @@ export function createAdPipeline({
     const parts = [];
     if (counts.transcribed) {
       parts.push(`${counts.transcribed} ${counts.transcribed === 1 ? 'episode' : 'episodes'} listened to`);
+    }
+    if (counts.inserted) {
+      parts.push(`${counts.inserted} ${counts.inserted === 1 ? 'stretch' : 'stretches'} the host inserted found`);
     }
     if (counts.found) parts.push(`${counts.found} repeated ${counts.found === 1 ? 'segment' : 'segments'} found`);
     if (counts.heard) parts.push(`${counts.heard} sponsor ${counts.heard === 1 ? 'read' : 'reads'} heard`);
@@ -412,6 +415,8 @@ export function createAdPipeline({
         // to decide" and "not yet asked" are not the same answer.
         const inputs = adDetect.detectionInputs(showId);
         let detected = { skipped: 'unchanged' };
+        let inserted = { skipped: 'unchanged' };
+        let insertedNew = 0;
         let heard = transcriber ? { skipped: 'unchanged' } : null;
         // 'ran' when any detector did: the jingle search alone can be what a pass
         // needed, and what it wrote can settle the catalogue before the others look.
@@ -427,11 +432,24 @@ export function createAdPipeline({
            * pass to see the other's result; now the pass asks again when the jingle
            * search changed something, and stops when it did not.
            */
+          // Once, before the rounds: it reads only frames, which the rounds do not
+          // change, and what it finds is what the acoustic search must leave alone.
+          // After the jingle search above, so a jingle that search took back no
+          // longer covers the pre-roll this must now cut.
+          inserted = await adDetect.detectCopiedAudio(showId);
+          insertedNew = inserted?.newSegments ?? 0;
           for (let round = 0; round < 2; round += 1) {
             detected = await adDetect.detectForShow(showId);
             heard = transcriber ? await adDetect.detectFromTranscripts(showId) : null;
             const again = await adDetect.detectAnchors(showId);
             anchored = mergeAnchored(anchored, again);
+            // A jingle taken back here (when the first jingle search was skipped this
+            // pass) no longer covers the pre-roll, which the copied search left alone
+            // while it did: ask it again, or that pre-roll goes out uncut.
+            if (again?.takenBack) {
+              inserted = await adDetect.detectCopiedAudio(showId);
+              insertedNew += inserted?.newSegments ?? 0;
+            }
             if (!again.changed) {
               settled = true;
               break;
@@ -465,6 +483,7 @@ export function createAdPipeline({
           refused: [...refused.values()],
           corpus: holds.corpusSize,
           found: detected?.newSegments ?? 0,
+          inserted: insertedNew,
           transcribed: transcribed?.transcribed ?? 0,
           transcriptionFailed: transcribed?.failed ?? 0,
           heard: heard?.newSegments ?? 0,
@@ -491,6 +510,7 @@ export function createAdPipeline({
             fingerprinted: fingerprinted?.fingerprinted ?? 0,
             transcribed: transcribed?.transcribed ?? 0,
             segments: detected?.segments ?? 0,
+            inserted: inserted?.segments ?? 0,
             spoken: heard?.segments ?? 0,
             trimmed: trimmed.trimmed,
             failed: trimmed.failed,
