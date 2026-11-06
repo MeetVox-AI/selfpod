@@ -965,7 +965,10 @@ export default async function fragmentRoutes(fastify, services) {
         return reply.send('');
       } catch (err) {
         if (!err.status || err.status >= 500) throw err;
-        reply.status(err.status);
+        // 422 whatever the cause (bad name, folder taken, folder not writable): the
+        // browser only swaps a 422 into the modal, and any other status would be
+        // reported as a bare "Something went wrong" with the real reason discarded.
+        reply.status(422);
         return reply.view('partials/modal-new-show.eta', {
           title: request.body?.title,
           slug: request.body?.slug,

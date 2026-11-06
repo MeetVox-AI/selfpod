@@ -8,6 +8,15 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.11.1 — 2026-11-06
+
+### Fixed
+
+- **Creating a show that was refused said only "Something went wrong."** The reason —
+  a folder name already in use, a name that can't be a folder, or a shows folder
+  SelfPod can't write to — was thrown away by the page. It now appears under the field
+  in the *New show* dialog.
+
 ## 1.11.0 — 2026-10-28
 
 ### Added — adverts a host inserts as it serves, whatever their language
