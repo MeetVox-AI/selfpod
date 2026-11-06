@@ -265,6 +265,18 @@ describe('htmx fragments', () => {
     assert.equal(server.shows.get(show.id).title, 'No JS Title');
   });
 
+  it('answers a refused new show with 422, so the modal can show the reason', async () => {
+    const show = await seed();
+    await server.login();
+    // 409 and 400 used to leave the modal untouched with a bare "Something went wrong".
+    const taken = await server.post('/ui/shows', { title: 'Again', slug: show.slug }, { 'hx-request': 'true' });
+    assert.equal(taken.statusCode, 422);
+    assert.ok(taken.body.includes('already uses the folder name'));
+    const bad = await server.post('/ui/shows', { title: 'Bad', slug: '..' }, { 'hx-request': 'true' });
+    assert.equal(bad.statusCode, 422);
+    assert.ok(/be used as a folder name/.test(bad.body));
+  });
+
   it('requires the exact folder name before deleting a show', async () => {
     const show = await seed();
     await server.login();
